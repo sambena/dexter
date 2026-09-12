@@ -71,9 +71,10 @@ fn fetch_box_art_blocking(rom_id: i64, app: &AppHandle) -> Result<String, String
         }
     };
 
-    let bytes = thumbnails::fetch_box_art(&folder_name, &game_name).map_err(|e| e.to_string())?;
+    let client = thumbnails::http_client().map_err(|e| e.to_string())?;
+    let bytes = thumbnails::fetch_box_art(&client, &folder_name, &game_name).map_err(|e| e.to_string())?;
 
-    let dir = art_dir(&app)?;
+    let dir = art_dir(app)?;
     let file_path = dir.join(format!("game_{}.png", dat_game_id));
     std::fs::write(&file_path, &bytes).map_err(|e| e.to_string())?;
 
@@ -90,7 +91,16 @@ fn fetch_box_art_blocking(rom_id: i64, app: &AppHandle) -> Result<String, String
 /// yet. Shares the same cancel flag as scan_library/hash_pending_roms, so the
 /// existing Stop button works here too.
 #[tauri::command]
-pub async fn fetch_all_box_art(app: AppHandle, state: State<'_, AppState>) -> Result<ArtFetchSummary, String> {
+pub async fn fetch_all_box_art(app: AppHandle) -> Result<ArtFetchSummary, String> {
+    // reqwest's blocking client panics if it's used or dropped on an async
+    // runtime thread, so the whole download loop runs on a blocking thread.
+    tauri::async_runtime::spawn_blocking(move || fetch_all_box_art_blocking(&app))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn fetch_all_box_art_blocking(app: &AppHandle) -> Result<ArtFetchSummary, String> {
+    let state = app.state::<AppState>();
     let targets = {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
         repo::list_matched_games_missing_art(&conn).map_err(|e| e.to_string())?
@@ -99,7 +109,8 @@ pub async fn fetch_all_box_art(app: AppHandle, state: State<'_, AppState>) -> Re
     state.cancel_flag.store(false, Ordering::SeqCst);
     let total = targets.len();
     let mut summary = ArtFetchSummary::default();
-    let dir = art_dir(&app)?;
+    let dir = art_dir(app)?;
+    let client = thumbnails::http_client().map_err(|e| e.to_string())?;
 
     for (i, target) in targets.iter().enumerate() {
         if state.cancel_flag.load(Ordering::SeqCst) {
@@ -110,7 +121,7 @@ pub async fn fetch_all_box_art(app: AppHandle, state: State<'_, AppState>) -> Re
             ScanProgress { current: i + 1, total, current_file: target.game_name.clone() },
         );
 
-        match thumbnails::fetch_box_art(&target.folder_name, &target.game_name) {
+        match thumbnails::fetch_box_art(&client, &target.folder_name, &target.game_name) {
             Ok(bytes) => {
                 let file_path = dir.join(format!("game_{}.png", target.dat_game_id));
                 std::fs::write(&file_path, &bytes).map_err(|e| e.to_string())?;

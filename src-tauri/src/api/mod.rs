@@ -169,7 +169,7 @@ async fn run(app: &AppHandle, name: &str, a: &Map<String, Value>) -> Result<Valu
         "get_box_art" => to_value(art::get_box_art(arg(a, "rom_id")?, state)),
         "has_known_box_art_source" => Ok(json!(art::has_known_box_art_source(arg(a, "folder_name")?))),
         "fetch_box_art" => to_value(art::fetch_box_art(arg(a, "rom_id")?, handle).await),
-        "fetch_all_box_art" => to_value(art::fetch_all_box_art(handle, state).await),
+        "fetch_all_box_art" => to_value(art::fetch_all_box_art(handle).await),
         "set_box_art_file" => {
             let rom_id = arg(a, "rom_id")?;
             let file_path: String = arg(a, "file_path")?;

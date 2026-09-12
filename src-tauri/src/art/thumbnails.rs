@@ -81,7 +81,17 @@ fn encode_path_segment(s: &str) -> String {
     out
 }
 
-pub fn fetch_box_art(folder_name: &str, game_name: &str) -> anyhow::Result<Vec<u8>> {
+/// One client per download job, so connections to GitHub are reused and a
+/// stalled request can't hang the job forever. Must be created and dropped
+/// off the async runtime (reqwest's blocking client panics otherwise).
+pub fn http_client() -> anyhow::Result<reqwest::blocking::Client> {
+    Ok(reqwest::blocking::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(60))
+        .build()?)
+}
+
+pub fn fetch_box_art(client: &reqwest::blocking::Client, folder_name: &str, game_name: &str) -> anyhow::Result<Vec<u8>> {
     let repo = thumbnails_repo(folder_name)
         .ok_or_else(|| anyhow::anyhow!("No known box art source for system \"{}\".", folder_name))?;
     let file_name = encode_path_segment(&sanitize_name(game_name));
@@ -89,7 +99,7 @@ pub fn fetch_box_art(folder_name: &str, game_name: &str) -> anyhow::Result<Vec<u
         "https://raw.githubusercontent.com/libretro-thumbnails/{}/master/Named_Boxarts/{}.png",
         repo, file_name
     );
-    let response = reqwest::blocking::get(&url)?;
+    let response = client.get(&url).send()?;
     if !response.status().is_success() {
         anyhow::bail!("No box art found for \"{}\" ({})", game_name, response.status());
     }
