@@ -98,7 +98,7 @@ export function TopBar({ onOpenSettings }: { onOpenSettings: () => void }) {
 
   return (
     <header className="top-bar">
-      <h1 className="app-title">ROM Manager</h1>
+      <h1 className="app-title">Dexter</h1>
       <div className="top-bar-status">
         {!activeJob && lastSummary && (
           <span className="scan-summary">
