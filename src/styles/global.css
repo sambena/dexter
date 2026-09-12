@@ -1,0 +1,260 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f5f5f5;
+  --panel-bg: #ffffff;
+  --border: #d8d8d8;
+  --text: #1a1a1a;
+  --text-muted: #666;
+  --accent: #3a6ff0;
+  --matched: #2ea043;
+  --unmatched: #d4a017;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1e1e1e;
+    --panel-bg: #262626;
+    --border: #3a3a3a;
+    --text: #eaeaea;
+    --text-muted: #999;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.top-bar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.6rem 1rem;
+  background: var(--panel-bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.app-title {
+  font-size: 1.1rem;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.top-bar-status {
+  flex: 1;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.top-bar-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.two-pane {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(280px, 380px) 1fr;
+  overflow: hidden;
+}
+
+.pane {
+  overflow-y: auto;
+}
+
+.pane-left {
+  border-right: 1px solid var(--border);
+  background: var(--panel-bg);
+}
+
+.pane-right {
+  padding: 1.25rem;
+}
+
+.rom-list-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.filter-bar {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.filter-bar input {
+  flex: 1;
+  min-width: 0;
+}
+
+.rom-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+}
+
+.rom-list-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.rom-list-item:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.rom-list-item.selected {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.rom-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.system-badge {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.05rem 0.35rem;
+}
+
+.match-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--unmatched);
+}
+
+.match-dot.matched {
+  background: var(--matched);
+}
+
+.details-panel dl {
+  display: grid;
+  grid-template-columns: 8rem 1fr;
+  row-gap: 0.6rem;
+  column-gap: 1rem;
+}
+
+.details-panel dt {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.details-panel dd {
+  margin: 0;
+  word-break: break-word;
+}
+
+.details-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
+
+.mono {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 0.85rem;
+}
+
+.hint {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  padding: 0.75rem;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+.modal {
+  background: var(--panel-bg);
+  border-radius: 8px;
+  padding: 1.25rem;
+  width: min(640px, 90vw);
+  max-height: 85vh;
+  overflow-y: auto;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.settings-section {
+  margin-top: 1.25rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border);
+}
+
+.settings-section:first-of-type {
+  margin-top: 0.75rem;
+  padding-top: 0;
+  border-top: none;
+}
+
+.settings-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.settings-row input {
+  flex: 1;
+}
+
+.settings-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.settings-table th,
+.settings-table td {
+  text-align: left;
+  padding: 0.35rem 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+
+button {
+  cursor: pointer;
+}
