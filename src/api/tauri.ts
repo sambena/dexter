@@ -26,6 +26,8 @@ export const api = {
   hasKnownDatSource: (folderName: string) => invoke<boolean>("has_known_dat_source", { folderName }),
 
   scanLibrary: () => invoke<ScanSummary>("scan_library"),
+  hashPendingRoms: () => invoke<ScanSummary>("hash_pending_roms"),
+  cancelScan: () => invoke<void>("cancel_scan"),
 
   listRoms: (filter: RomFilter) => invoke<RomListItemDto[]>("list_roms", { filter }),
   getRomDetails: (romId: number) => invoke<RomDetailsDto | null>("get_rom_details", { romId }),

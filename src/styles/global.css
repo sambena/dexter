@@ -161,6 +161,14 @@ body {
   background: var(--matched);
 }
 
+.match-dot.pending {
+  background: var(--text-muted);
+}
+
+.match-dot.error {
+  background: #d1453a;
+}
+
 .details-panel dl {
   display: grid;
   grid-template-columns: 8rem 1fr;

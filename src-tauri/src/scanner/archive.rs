@@ -2,12 +2,14 @@ use crate::scanner::hashing::{hash_reader, FileHashes};
 use std::fs::File;
 use std::path::Path;
 
-pub struct ArchiveEntry {
+pub struct ArchiveEntryMeta {
     pub inner_name: String,
-    pub hashes: FileHashes,
+    pub size: u64,
 }
 
-pub fn hash_zip_entries(path: &Path) -> anyhow::Result<Vec<ArchiveEntry>> {
+/// Lists the entries inside a .zip without decompressing/hashing them — cheap
+/// metadata-only read, used for the quick file-discovery scan.
+pub fn list_zip_entries(path: &Path) -> anyhow::Result<Vec<ArchiveEntryMeta>> {
     let file = File::open(path)?;
     let mut archive = zip::ZipArchive::new(file)?;
     let mut results = Vec::new();
@@ -16,9 +18,18 @@ pub fn hash_zip_entries(path: &Path) -> anyhow::Result<Vec<ArchiveEntry>> {
         if entry.is_dir() {
             continue;
         }
-        let inner_name = entry.name().to_string();
-        let hashes = hash_reader(entry)?;
-        results.push(ArchiveEntry { inner_name, hashes });
+        results.push(ArchiveEntryMeta {
+            inner_name: entry.name().to_string(),
+            size: entry.size(),
+        });
     }
     Ok(results)
+}
+
+/// Hashes a single named entry inside a .zip — used by the hashing pass.
+pub fn hash_zip_member(zip_path: &Path, entry_name: &str) -> anyhow::Result<FileHashes> {
+    let file = File::open(zip_path)?;
+    let mut archive = zip::ZipArchive::new(file)?;
+    let entry = archive.by_name(entry_name)?;
+    Ok(hash_reader(entry)?)
 }

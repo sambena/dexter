@@ -29,8 +29,10 @@ export function FilterBar() {
         onChange={(e) => setFilters({ ...filters, match_status: e.target.value })}
       >
         <option value="all">All</option>
+        <option value="pending">Not hashed yet</option>
         <option value="matched">Matched</option>
         <option value="unmatched">Unmatched</option>
+        <option value="error">Errors</option>
       </select>
     </div>
   );

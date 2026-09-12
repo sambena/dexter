@@ -4,25 +4,29 @@ import { api } from "../../api/tauri";
 import { useLibrary } from "../../state/useLibraryStore";
 import type { ScanProgress, ScanSummary } from "../../types/rom";
 
+type Job = "scan" | "hash" | null;
+
 export function TopBar({ onOpenSettings }: { onOpenSettings: () => void }) {
   const { settings, refreshRoms, refreshSystems } = useLibrary();
-  const [scanning, setScanning] = useState(false);
+  const [activeJob, setActiveJob] = useState<Job>(null);
+  const [stopping, setStopping] = useState(false);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
-  const [lastSummary, setLastSummary] = useState<ScanSummary | null>(null);
+  const [lastSummary, setLastSummary] = useState<{ job: Job; summary: ScanSummary } | null>(null);
   const unlistenRefs = useRef<Array<() => void>>([]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const un1 = await listen<ScanProgress>("scan://progress", (e) => setProgress(e.payload));
-      const un2 = await listen<ScanSummary>("scan://done", (e) => {
-        setLastSummary(e.payload);
-      });
+      const listeners = await Promise.all([
+        listen<ScanProgress>("scan://progress", (e) => setProgress(e.payload)),
+        listen<ScanSummary>("scan://done", (e) => setLastSummary({ job: "scan", summary: e.payload })),
+        listen<ScanProgress>("hash://progress", (e) => setProgress(e.payload)),
+        listen<ScanSummary>("hash://done", (e) => setLastSummary({ job: "hash", summary: e.payload })),
+      ]);
       if (cancelled) {
-        un1();
-        un2();
+        listeners.forEach((un) => un());
       } else {
-        unlistenRefs.current = [un1, un2];
+        unlistenRefs.current = listeners;
       }
     })();
     return () => {
@@ -36,7 +40,8 @@ export function TopBar({ onOpenSettings }: { onOpenSettings: () => void }) {
       onOpenSettings();
       return;
     }
-    setScanning(true);
+    setActiveJob("scan");
+    setStopping(false);
     setProgress(null);
     setLastSummary(null);
     try {
@@ -44,10 +49,37 @@ export function TopBar({ onOpenSettings }: { onOpenSettings: () => void }) {
       await refreshRoms();
       await refreshSystems();
     } catch (e) {
-      setLastSummary({ scanned_files: 0, matched: 0, unmatched: 0, removed: 0, errors: [String(e)] });
+      setLastSummary({ job: "scan", summary: { scanned_files: 0, pending: 0, matched: 0, unmatched: 0, removed: 0, errors: [String(e)] } });
     } finally {
-      setScanning(false);
+      setActiveJob(null);
+      setStopping(false);
       setProgress(null);
+    }
+  }
+
+  async function handleHash() {
+    setActiveJob("hash");
+    setStopping(false);
+    setProgress(null);
+    setLastSummary(null);
+    try {
+      await api.hashPendingRoms();
+      await refreshRoms();
+    } catch (e) {
+      setLastSummary({ job: "hash", summary: { scanned_files: 0, pending: 0, matched: 0, unmatched: 0, removed: 0, errors: [String(e)] } });
+    } finally {
+      setActiveJob(null);
+      setStopping(false);
+      setProgress(null);
+    }
+  }
+
+  async function handleStop() {
+    setStopping(true);
+    try {
+      await api.cancelScan();
+    } catch {
+      // best-effort — the running job will just finish naturally
     }
   }
 
@@ -55,23 +87,40 @@ export function TopBar({ onOpenSettings }: { onOpenSettings: () => void }) {
     <header className="top-bar">
       <h1 className="app-title">ROM Manager</h1>
       <div className="top-bar-status">
-        {scanning && progress && (
+        {activeJob && progress && (
           <span className="scan-progress">
-            Scanning {progress.current}/{progress.total}: {progress.current_file}
+            {activeJob === "scan" ? "Scanning" : "Hashing"} {progress.current}/{progress.total}: {progress.current_file}
           </span>
         )}
-        {!scanning && lastSummary && (
+        {!activeJob && lastSummary && (
           <span className="scan-summary">
-            Scanned {lastSummary.scanned_files} · {lastSummary.matched} matched · {lastSummary.unmatched} unmatched
-            {lastSummary.removed > 0 ? ` · ${lastSummary.removed} removed` : ""}
-            {lastSummary.errors.length > 0 ? ` · ${lastSummary.errors.length} error(s)` : ""}
+            {lastSummary.job === "scan" ? (
+              <>
+                Found {lastSummary.summary.scanned_files} files · {lastSummary.summary.pending} ready to hash
+                {lastSummary.summary.removed > 0 ? ` · ${lastSummary.summary.removed} removed` : ""}
+              </>
+            ) : (
+              <>
+                Hashed {lastSummary.summary.scanned_files} · {lastSummary.summary.matched} matched ·{" "}
+                {lastSummary.summary.unmatched} unmatched
+              </>
+            )}
+            {lastSummary.summary.errors.length > 0 ? ` · ${lastSummary.summary.errors.length} error(s)` : ""}
           </span>
         )}
       </div>
       <div className="top-bar-actions">
-        <button onClick={handleScan} disabled={scanning}>
-          {scanning ? "Scanning…" : "Scan Library"}
+        <button onClick={handleScan} disabled={activeJob !== null}>
+          {activeJob === "scan" ? "Scanning…" : "Scan Files"}
         </button>
+        <button onClick={handleHash} disabled={activeJob !== null}>
+          {activeJob === "hash" ? "Hashing…" : "Hash & Match"}
+        </button>
+        {activeJob !== null && (
+          <button onClick={handleStop} disabled={stopping}>
+            {stopping ? "Stopping…" : "Stop"}
+          </button>
+        )}
         <button onClick={onOpenSettings}>Settings</button>
       </div>
     </header>

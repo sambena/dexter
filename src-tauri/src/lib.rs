@@ -26,6 +26,7 @@ pub fn run() {
 
             app.manage(AppState {
                 db: std::sync::Mutex::new(conn),
+                cancel_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             });
             Ok(())
         })
@@ -41,6 +42,8 @@ pub fn run() {
             commands::dat::fetch_dat_file,
             commands::dat::has_known_dat_source,
             commands::scan::scan_library,
+            commands::hash::hash_pending_roms,
+            commands::control::cancel_scan,
             commands::roms::list_roms,
             commands::roms::get_rom_details,
         ])

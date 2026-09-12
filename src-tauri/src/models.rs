@@ -66,6 +66,7 @@ pub struct RomFilter {
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ScanSummary {
     pub scanned_files: i64,
+    pub pending: i64,
     pub matched: i64,
     pub unmatched: i64,
     pub removed: i64,

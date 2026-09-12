@@ -13,7 +13,7 @@ export function RomList() {
         <p className="hint">No ROM folder configured yet. Open Settings to choose one.</p>
       )}
       {!loading && settings.rom_root_path && roms.length === 0 && (
-        <p className="hint">No ROMs found. Try Scan Library.</p>
+        <p className="hint">No ROMs found. Try Scan Files.</p>
       )}
       <ul className="rom-list">
         {roms.map((rom) => (

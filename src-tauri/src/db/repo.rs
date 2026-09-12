@@ -220,37 +220,52 @@ pub fn find_dat_rom_match(
     Ok(candidates.into_iter().next().map(|c| c.dat_rom_id))
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn upsert_rom(
+/// Quick-scan insert for a file (or archive entry) that hasn't been hashed yet.
+/// Deliberately leaves crc32/md5/sha1/dat_rom_id/match_status untouched on conflict
+/// so re-running a quick scan never throws away hash/match results from a previous
+/// hashing pass over the same file.
+pub fn upsert_pending_rom(
     conn: &Connection,
     system_id: i64,
     file_path: &str,
     file_name: &str,
     size: Option<i64>,
-    crc32: Option<&str>,
-    md5: Option<&str>,
-    sha1: Option<&str>,
     archive_member: Option<&str>,
-    dat_rom_id: Option<i64>,
 ) -> rusqlite::Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
-    let match_status = if dat_rom_id.is_some() { "matched" } else { "unmatched" };
     conn.execute(
-        "INSERT INTO roms (system_id, file_path, file_name, size, crc32, md5, sha1, archive_member, dat_rom_id, match_status, last_scanned_at, seen_this_scan)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1)
+        "INSERT INTO roms (system_id, file_path, file_name, size, archive_member, match_status, last_scanned_at, seen_this_scan)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6, 1)
          ON CONFLICT(file_path) DO UPDATE SET
             system_id = excluded.system_id,
             file_name = excluded.file_name,
-            size = excluded.size,
-            crc32 = excluded.crc32,
-            md5 = excluded.md5,
-            sha1 = excluded.sha1,
+            size = COALESCE(roms.size, excluded.size),
             archive_member = excluded.archive_member,
-            dat_rom_id = excluded.dat_rom_id,
-            match_status = excluded.match_status,
-            last_scanned_at = excluded.last_scanned_at,
+            last_scanned_at = ?6,
             seen_this_scan = 1",
-        params![system_id, file_path, file_name, size, crc32, md5, sha1, archive_member, dat_rom_id, match_status, now],
+        params![system_id, file_path, file_name, size, archive_member, now],
+    )?;
+    Ok(())
+}
+
+/// Quick-scan insert for a whole-folder ROM dump (e.g. an extracted Wii U title) —
+/// these are never hashed, so they go straight to "unmatched".
+pub fn upsert_folder_rom(
+    conn: &Connection,
+    system_id: i64,
+    file_path: &str,
+    file_name: &str,
+) -> rusqlite::Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "INSERT INTO roms (system_id, file_path, file_name, match_status, last_scanned_at, seen_this_scan)
+         VALUES (?1, ?2, ?3, 'unmatched', ?4, 1)
+         ON CONFLICT(file_path) DO UPDATE SET
+            system_id = excluded.system_id,
+            file_name = excluded.file_name,
+            last_scanned_at = ?4,
+            seen_this_scan = 1",
+        params![system_id, file_path, file_name, now],
     )?;
     Ok(())
 }
@@ -261,6 +276,54 @@ pub fn prune_system_unseen(conn: &Connection, system_id: i64) -> rusqlite::Resul
         params![system_id],
     )?;
     Ok(removed as i64)
+}
+
+pub struct PendingRom {
+    pub id: i64,
+    pub system_id: Option<i64>,
+    pub file_path: String,
+    pub archive_member: Option<String>,
+}
+
+pub fn list_pending_roms(conn: &Connection) -> rusqlite::Result<Vec<PendingRom>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, system_id, file_path, archive_member FROM roms WHERE match_status = 'pending'",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(PendingRom {
+            id: r.get(0)?,
+            system_id: r.get(1)?,
+            file_path: r.get(2)?,
+            archive_member: r.get(3)?,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn update_rom_hash(
+    conn: &Connection,
+    rom_id: i64,
+    size: i64,
+    crc32: &str,
+    md5: &str,
+    sha1: &str,
+    dat_rom_id: Option<i64>,
+) -> rusqlite::Result<()> {
+    let match_status = if dat_rom_id.is_some() { "matched" } else { "unmatched" };
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE roms SET size = ?1, crc32 = ?2, md5 = ?3, sha1 = ?4, dat_rom_id = ?5, match_status = ?6, last_scanned_at = ?7 WHERE id = ?8",
+        params![size, crc32, md5, sha1, dat_rom_id, match_status, now, rom_id],
+    )?;
+    Ok(())
+}
+
+pub fn mark_rom_hash_error(conn: &Connection, rom_id: i64) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE roms SET match_status = 'error' WHERE id = ?1",
+        params![rom_id],
+    )?;
+    Ok(())
 }
 
 // ---------- browsing ----------
