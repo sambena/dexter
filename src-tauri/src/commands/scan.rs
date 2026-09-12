@@ -1,6 +1,7 @@
 use crate::db::repo;
 use crate::models::{ScanProgress, ScanSummary};
 use crate::scanner::{archive, hashing, walker};
+use crate::scanner::walker::ScanTarget;
 use crate::state::AppState;
 use tauri::{Emitter, State};
 
@@ -27,16 +28,16 @@ pub async fn scan_library(app: tauri::AppHandle, state: State<'_, AppState>) -> 
 
     let system_folders = walker::list_system_folders(&root).map_err(|e| e.to_string())?;
 
-    // Resolve/create a system row for every folder up front, and collect the file list to scan.
-    let mut jobs: Vec<(i64, std::path::PathBuf)> = Vec::new();
+    // Resolve/create a system row for every folder up front, and collect the scan targets.
+    let mut jobs: Vec<(i64, ScanTarget)> = Vec::new();
     {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
         for folder in &system_folders {
             let system_id = repo::get_or_create_system_by_folder(&conn, &folder.folder_name)
                 .map_err(|e| e.to_string())?;
             repo::mark_system_unseen(&conn, system_id).map_err(|e| e.to_string())?;
-            for file in walker::list_files_in(&folder.path) {
-                jobs.push((system_id, file));
+            for target in walker::list_scan_targets(&folder.path) {
+                jobs.push((system_id, target));
             }
         }
     }
@@ -44,20 +45,49 @@ pub async fn scan_library(app: tauri::AppHandle, state: State<'_, AppState>) -> 
     let total = jobs.len();
     let mut summary = ScanSummary::default();
 
-    for (i, (system_id, path)) in jobs.iter().enumerate() {
+    for (i, (system_id, target)) in jobs.iter().enumerate() {
+        let display_path = match target {
+            ScanTarget::File(p) => p.display().to_string(),
+            ScanTarget::FolderRom(p) => p.display().to_string(),
+        };
         let _ = app.emit(
             "scan://progress",
             ScanProgress {
                 current: i + 1,
                 total,
-                current_file: path.display().to_string(),
+                current_file: display_path,
             },
         );
 
         let conn = state.db.lock().map_err(|e| e.to_string())?;
 
-        if is_zip(path) {
-            match archive::hash_zip_entries(path) {
+        match target {
+            ScanTarget::FolderRom(path) => {
+                // Whole-folder ROM dumps (e.g. extracted Wii U titles) contain far too many
+                // internal files to hash meaningfully, and have no equivalent DAT to match
+                // against — list the folder itself as a single unmatched ROM.
+                let file_name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default()
+                    .to_string();
+                repo::upsert_rom(
+                    &conn,
+                    *system_id,
+                    &path.display().to_string(),
+                    &file_name,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .map_err(|e| e.to_string())?;
+                summary.unmatched += 1;
+                summary.scanned_files += 1;
+            }
+            ScanTarget::File(path) if is_zip(path) => match archive::hash_zip_entries(path) {
                 Ok(entries) => {
                     for entry in entries {
                         let file_path = format!("{}::{}", path.display(), entry.inner_name);
@@ -79,10 +109,10 @@ pub async fn scan_library(app: tauri::AppHandle, state: State<'_, AppState>) -> 
                             *system_id,
                             &file_path,
                             &entry.inner_name,
-                            entry.hashes.size as i64,
-                            &entry.hashes.crc32,
-                            &entry.hashes.md5,
-                            &entry.hashes.sha1,
+                            Some(entry.hashes.size as i64),
+                            Some(&entry.hashes.crc32),
+                            Some(&entry.hashes.md5),
+                            Some(&entry.hashes.sha1),
                             Some(&entry.inner_name),
                             dat_rom_id,
                         )
@@ -91,9 +121,8 @@ pub async fn scan_library(app: tauri::AppHandle, state: State<'_, AppState>) -> 
                     }
                 }
                 Err(e) => summary.errors.push(format!("{}: {}", path.display(), e)),
-            }
-        } else {
-            match hashing::hash_file(path) {
+            },
+            ScanTarget::File(path) => match hashing::hash_file(path) {
                 Ok(hashes) => {
                     let file_name = path
                         .file_name()
@@ -118,10 +147,10 @@ pub async fn scan_library(app: tauri::AppHandle, state: State<'_, AppState>) -> 
                         *system_id,
                         &path.display().to_string(),
                         &file_name,
-                        hashes.size as i64,
-                        &hashes.crc32,
-                        &hashes.md5,
-                        &hashes.sha1,
+                        Some(hashes.size as i64),
+                        Some(&hashes.crc32),
+                        Some(&hashes.md5),
+                        Some(&hashes.sha1),
                         None,
                         dat_rom_id,
                     )
@@ -129,7 +158,7 @@ pub async fn scan_library(app: tauri::AppHandle, state: State<'_, AppState>) -> 
                     summary.scanned_files += 1;
                 }
                 Err(e) => summary.errors.push(format!("{}: {}", path.display(), e)),
-            }
+            },
         }
     }
 
