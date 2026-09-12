@@ -40,6 +40,12 @@ const SKIP_EXTENSIONS: &[&str] = &[
     "txt", "nfo", "md", "pdf", "doc", "docx", "url", "lnk", "ini", "cfg", "conf",
     "json", "xml", "yml", "yaml", "log", "db", "sqlite", "sqlite3",
     "srm", "state", "rtc", "bak", "tmp",
+    // Battery saves and memory cards written by emulators.
+    "sav", "eep", "sra", "fla", "mpk", "dsv", "mcr",
+    // Video snaps and music that frontends download next to ROMs.
+    "mp4", "mkv", "avi", "webm", "mov", "mp3", "ogg", "wav", "flac",
+    // Tools and checksum files that come along with ROM sets.
+    "exe", "dll", "bat", "cmd", "sh", "sfv", "md5", "sha1",
 ];
 
 fn has_skipped_extension(path: &Path) -> bool {
@@ -99,4 +105,23 @@ pub fn list_scan_targets(system_dir: &Path) -> Vec<ScanTarget> {
         }
     }
     results
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn non_rom_files_found_in_real_libraries_are_skipped() {
+        for name in ["Pokemon - Red Version.sav", "Combat-video.mp4", "scraper.exe", "Game.STATE1", "cover.PNG"] {
+            assert!(has_skipped_extension(Path::new(name)), "{} should be skipped", name);
+        }
+    }
+
+    #[test]
+    fn rom_files_are_kept() {
+        for name in ["Super Mario Bros..nes", "Aerobiz.smc", "F-Zero GX (USA).rvz", "game.zip", "Wii U Title"] {
+            assert!(!has_skipped_extension(Path::new(name)), "{} should be kept", name);
+        }
+    }
 }
