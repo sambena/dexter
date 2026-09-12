@@ -231,4 +231,8 @@ pub struct MaintenanceSummary {
     pub succeeded: i64,
     pub skipped: i64,
     pub errors: Vec<String>,
+    /// Where deleted files without a Recycle Bin (network shares, removable
+    /// drives) were moved, if any were.
+    #[serde(default)]
+    pub moved_to: Vec<String>,
 }

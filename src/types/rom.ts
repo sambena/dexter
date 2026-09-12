@@ -131,4 +131,6 @@ export interface MaintenanceSummary {
   succeeded: number;
   skipped: number;
   errors: string[];
+  /** Folders deleted files were moved to, for files with no Recycle Bin (network shares). */
+  moved_to: string[];
 }

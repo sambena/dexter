@@ -14,6 +14,9 @@ pub fn list_system_folders(root: &Path) -> std::io::Result<Vec<SystemFolder>> {
         let path = entry.path();
         if path.is_dir() {
             if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.eq_ignore_ascii_case(DELETED_FOLDER_NAME) {
+                    continue;
+                }
                 out.push(SystemFolder {
                     folder_name: name.to_string(),
                     path: path.clone(),
@@ -24,9 +27,14 @@ pub fn list_system_folders(root: &Path) -> std::io::Result<Vec<SystemFolder>> {
     Ok(out)
 }
 
+/// Where Dexter moves deleted files that have no Recycle Bin to go to
+/// (network shares), so they stay recoverable. Never scanned.
+pub const DELETED_FOLDER_NAME: &str = "_Deleted by Dexter";
+
 /// Subfolder names commonly created by emulator frontends (RetroArch, LaunchBox, etc.)
 /// alongside the actual ROMs — never worth descending into during a scan.
 const SKIP_DIR_NAMES: &[&str] = &[
+    "_deleted by dexter",
     "media", "thumbnails", "thumbs", "screenshots", "snaps", "titles", "boxart", "boxarts",
     "covers", "manuals", "saves", "save", "states", "savestates", "cheats", "configs", "config",
     "playlists", "overlays", "shaders", "logs", "downloaded_media", "named_boxarts",

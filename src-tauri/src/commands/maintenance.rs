@@ -1,5 +1,6 @@
 use crate::db::repo;
 use crate::models::{DuplicateGroupDto, MaintenanceSummary, RenamePlanEntryDto};
+use crate::scanner::walker::DELETED_FOLDER_NAME;
 use crate::state::AppState;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -314,14 +315,72 @@ pub async fn apply_renames(rom_ids: Vec<i64>, app: tauri::AppHandle) -> Result<M
     .map_err(|e| e.to_string())?
 }
 
-/// Deletes the files backing the given ROMs by sending them to the Recycle
-/// Bin, so a mistake stays recoverable from Windows.
+/// Windows only has a Recycle Bin on local fixed drives. Network shares
+/// (\\server paths and mapped drives) and removable drives don't, and the
+/// trash crate can't even resolve \\server paths.
+#[cfg(windows)]
+fn has_recycle_bin(path: &Path) -> bool {
+    use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
+    const DRIVE_FIXED: u32 = 3;
+    let s = path.to_string_lossy();
+    let bytes = s.as_bytes();
+    if s.starts_with(r"\\") || bytes.len() < 2 || bytes[1] != b':' {
+        return false;
+    }
+    let root: Vec<u16> = format!("{}:\\", bytes[0] as char).encode_utf16().chain([0]).collect();
+    // SAFETY: `root` is a NUL-terminated UTF-16 string that outlives the call.
+    unsafe { GetDriveTypeW(root.as_ptr()) == DRIVE_FIXED }
+}
+
+#[cfg(not(windows))]
+fn has_recycle_bin(_path: &Path) -> bool {
+    true
+}
+
+/// Where a deleted file without a Recycle Bin goes: under the ROM root's
+/// deleted folder at the same relative path, so it's obvious where it came
+/// from and can be moved straight back. Never overwrites an earlier deletion.
+fn deleted_destination(path: &Path, rom_root: Option<&Path>) -> PathBuf {
+    let parent = path.parent().unwrap_or(Path::new(""));
+    let file_name = path.file_name().map(PathBuf::from).unwrap_or_default();
+    let dest = match rom_root.and_then(|root| Some((root, path.strip_prefix(root).ok()?))) {
+        Some((root, relative)) => root.join(DELETED_FOLDER_NAME).join(relative),
+        None => parent.join(DELETED_FOLDER_NAME).join(file_name),
+    };
+    if !dest.exists() {
+        return dest;
+    }
+    let name = dest.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+    let (stem, ext) = split_name(&name);
+    (2..)
+        .map(|n| match ext {
+            Some(ext) => dest.with_file_name(format!("{} ({}).{}", stem, n, ext)),
+            None => dest.with_file_name(format!("{} ({})", stem, n)),
+        })
+        .find(|candidate| !candidate.exists())
+        .unwrap()
+}
+
+fn move_to_deleted_folder(path: &Path, rom_root: Option<&Path>) -> Result<PathBuf, String> {
+    let dest = deleted_destination(path, rom_root);
+    if let Some(dir) = dest.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    std::fs::rename(path, &dest).map_err(|e| e.to_string())?;
+    Ok(dest)
+}
+
+/// Deletes the files backing the given ROMs, recoverably: local files go to
+/// the Recycle Bin, and files on network shares are moved into a
+/// "_Deleted by Dexter" folder in the ROM root.
 #[tauri::command]
 pub async fn delete_roms(rom_ids: Vec<i64>, app: tauri::AppHandle) -> Result<MaintenanceSummary, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let conn = state.db.lock().map_err(|e| e.to_string())?;
+        let rom_root = repo::get_settings(&conn).map_err(|e| e.to_string())?.rom_root_path;
         let mut summary = MaintenanceSummary::default();
+        let mut moved_to: HashSet<String> = HashSet::new();
         let mut handled: Vec<String> = Vec::new();
 
         for rom_id in rom_ids {
@@ -350,7 +409,19 @@ pub async fn delete_roms(rom_ids: Vec<i64>, app: tauri::AppHandle) -> Result<Mai
                 }
             }
 
-            match trash::delete(&disk_path) {
+            let path = Path::new(&disk_path);
+            let result = if has_recycle_bin(path) {
+                trash::delete(path).map_err(|e| e.to_string())
+            } else {
+                move_to_deleted_folder(path, rom_root.as_deref().map(Path::new)).map(|dest| {
+                    let folder = dest
+                        .ancestors()
+                        .find(|a| a.file_name().is_some_and(|n| n == std::ffi::OsStr::new(DELETED_FOLDER_NAME)))
+                        .unwrap_or(&dest);
+                    moved_to.insert(folder.to_string_lossy().to_string());
+                })
+            };
+            match result {
                 Ok(()) => {
                     repo::delete_rom_rows_for_file(&conn, &disk_path).map_err(|e| e.to_string())?;
                     handled.push(disk_path);
@@ -359,6 +430,8 @@ pub async fn delete_roms(rom_ids: Vec<i64>, app: tauri::AppHandle) -> Result<Mai
                 Err(e) => summary.errors.push(format!("{}: {}", file_name, e)),
             }
         }
+        summary.moved_to = moved_to.into_iter().collect();
+        summary.moved_to.sort();
         Ok(summary)
     })
     .await
@@ -527,6 +600,35 @@ mod tests {
         assert!(dir.has("Game.gb") && !dir.has("Game (USA).gb"));
         let stored: String = conn.query_row("SELECT file_path FROM roms WHERE id = 1", [], |r| r.get(0)).unwrap();
         assert_eq!(stored, rom);
+    }
+
+    #[test]
+    fn deleted_files_keep_their_place_under_the_rom_root_and_never_collide() {
+        let dir = TempDir::new("deleted");
+        std::fs::create_dir_all(dir.0.join("SNES")).unwrap();
+        let first = dir.file("SNES/Jungle Book.zip", "a");
+        let moved = move_to_deleted_folder(Path::new(&first), Some(&dir.0)).unwrap();
+        assert_eq!(moved, dir.0.join(DELETED_FOLDER_NAME).join("SNES").join("Jungle Book.zip"));
+        assert!(!dir.has("SNES/Jungle Book.zip"));
+
+        let second = dir.file("SNES/Jungle Book.zip", "b");
+        let moved = move_to_deleted_folder(Path::new(&second), Some(&dir.0)).unwrap();
+        assert_eq!(moved, dir.0.join(DELETED_FOLDER_NAME).join("SNES").join("Jungle Book (2).zip"));
+        assert_eq!(std::fs::read_to_string(moved).unwrap(), "b");
+    }
+
+    #[test]
+    fn file_outside_the_rom_root_is_moved_beside_itself() {
+        let dir = TempDir::new("deleted-outside");
+        let file = dir.file("Game.gb", "rom");
+        let moved = move_to_deleted_folder(Path::new(&file), Some(Path::new(r"Z:\Elsewhere"))).unwrap();
+        assert_eq!(moved, dir.0.join(DELETED_FOLDER_NAME).join("Game.gb"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn network_paths_have_no_recycle_bin() {
+        assert!(!has_recycle_bin(Path::new(r"\\nas\Games\Roms\SNES\a.zip")));
     }
 
     #[test]

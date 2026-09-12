@@ -157,12 +157,13 @@ export function DetailsPanel() {
 
   async function deleteRom(rom: RomDetailsDto) {
     const ok = window.confirm(
-      `Send this file to the Recycle Bin?
+      `Delete this file?
 
 ${rom.file_path}
 
 ` +
-        `It can be restored from Windows if this was a mistake.`,
+        `Files on this PC go to the Recycle Bin. Files on a network share are moved to a ` +
+        `"_Deleted by Dexter" folder in your ROM folder, so they can still be restored.`,
     );
     if (!ok) return;
     setDeleting(true);
@@ -307,7 +308,7 @@ ${rom.file_path}
           {deleting && <span className="spinner inline" aria-hidden="true" />}
           Delete…
         </button>
-        <span className="hint details-actions-note">Deleted files go to the Recycle Bin.</span>
+        <span className="hint details-actions-note">Deleted files can be restored.</span>
       </div>
       {actionError && <p className="hint box-art-error">{actionError}</p>}
     </div>

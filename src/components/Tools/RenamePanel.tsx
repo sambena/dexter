@@ -67,7 +67,25 @@ export function RenamePanel() {
 
   return (
     <div className="settings-section">
-      <h3>Rename to DAT names</h3>
+      <div className="tools-toolbar">
+        <div className="settings-row">
+          <button className="primary" onClick={apply} disabled={busy || selected.size === 0}>
+            {busy && <span className="spinner inline" aria-hidden="true" />}
+            Rename {selected.size} file{selected.size === 1 ? "" : "s"}
+          </button>
+          <button onClick={load} disabled={busy}>
+            Refresh plan
+          </button>
+          {plan !== null && plan.length > 0 && (
+            <span className="hint">
+              {renameable.length} can be renamed · {selected.size} selected
+              {blocked.length > 0 ? ` · ${blocked.length} blocked` : ""}
+            </span>
+          )}
+        </div>
+        {message && <p className="hint tools-message">{message}</p>}
+      </div>
+
       <p className="hint">
         Renames matched ROMs to the canonical name from the DAT. Only matched files appear — an
         unmatched file has no authoritative name to rename to. Save files named after a ROM are renamed
@@ -81,12 +99,7 @@ export function RenamePanel() {
       )}
 
       {plan !== null && plan.length > 0 && (
-        <>
-          <p className="hint">
-            {renameable.length} can be renamed · {selected.size} selected
-            {blocked.length > 0 ? ` · ${blocked.length} blocked` : ""}
-          </p>
-          <table className="settings-table rename-table">
+        <table className="settings-table rename-table">
             <thead>
               <tr>
                 <th></th>
@@ -122,18 +135,7 @@ export function RenamePanel() {
               ))}
             </tbody>
           </table>
-          <div className="settings-row tools-actions">
-            <button onClick={apply} disabled={busy || selected.size === 0}>
-              {busy && <span className="spinner inline" aria-hidden="true" />}
-              Rename {selected.size} file{selected.size === 1 ? "" : "s"}
-            </button>
-            <button onClick={load} disabled={busy}>
-              Refresh plan
-            </button>
-          </div>
-        </>
       )}
-      {message && <p className="hint">{message}</p>}
     </div>
   );
 }
