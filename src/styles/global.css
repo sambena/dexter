@@ -619,3 +619,7 @@ button {
 button.danger {
   color: #d1453a;
 }
+
+button.primary {
+  font-weight: 600;
+}

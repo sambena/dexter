@@ -131,7 +131,20 @@ export function DetailsPanel() {
   const { startJob, endJob } = useJob();
   const [details, setDetails] = useState<RomDetailsDto | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [launching, setLaunching] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  async function launch(rom: RomDetailsDto) {
+    setLaunching(true);
+    setActionError(null);
+    try {
+      await api.launchRom(rom.id);
+    } catch (e) {
+      setActionError(String(e));
+    } finally {
+      setLaunching(false);
+    }
+  }
 
   async function deleteRom(rom: RomDetailsDto) {
     const ok = window.confirm(
@@ -168,6 +181,7 @@ ${rom.file_path}
       return;
     }
     let cancelled = false;
+    setActionError(null);
     api.getRomDetails(selectedRomId).then((d) => {
       if (!cancelled) setDetails(d);
     });
@@ -249,6 +263,19 @@ ${rom.file_path}
         <dd className="mono">{details.sha1 ?? "—"}</dd>
       </dl>
       <div className="details-actions">
+        <button
+          onClick={() => launch(details)}
+          disabled={launching || !details.emulator_path}
+          className="primary"
+          title={
+            details.emulator_path
+              ? undefined
+              : `No emulator is set for ${details.system_name ?? "this system"}. Choose one in Settings → Emulators.`
+          }
+        >
+          {launching && <span className="spinner inline" aria-hidden="true" />}
+          Play
+        </button>
         <button onClick={() => deleteRom(details)} disabled={deleting} className="danger">
           {deleting && <span className="spinner inline" aria-hidden="true" />}
           Delete…

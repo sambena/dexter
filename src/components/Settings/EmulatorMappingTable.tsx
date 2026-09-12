@@ -20,7 +20,10 @@ export function EmulatorMappingTable() {
   return (
     <div className="settings-section">
       <h3>Emulators</h3>
-      <p className="hint">Map each system to the emulator that should be shown for its ROMs.</p>
+      <p className="hint">
+        Map each system to the emulator that Play launches its ROMs with. In Args, %ROM% marks where the ROM path
+        goes; if it's left out, the path is added at the end.
+      </p>
       <table className="settings-table">
         <thead>
           <tr>

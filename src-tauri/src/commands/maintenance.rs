@@ -33,7 +33,7 @@ fn sanitize_file_name(name: &str) -> String {
 /// ROM rows key archive members as "<archive path>::<member>", so the value in
 /// file_path is not a path on disk for those rows. Everything that touches the
 /// filesystem goes through here first.
-fn on_disk_path(file_path: &str, archive_member: Option<&str>) -> String {
+pub(crate) fn on_disk_path(file_path: &str, archive_member: Option<&str>) -> String {
     match archive_member {
         Some(member) => file_path
             .strip_suffix(&format!("::{}", member))

@@ -42,6 +42,7 @@ export const api = {
 
   listRoms: (filter: RomFilter) => invoke<RomListItemDto[]>("list_roms", { filter }),
   getRomDetails: (romId: number) => invoke<RomDetailsDto | null>("get_rom_details", { romId }),
+  launchRom: (romId: number) => invoke<void>("launch_rom", { romId }),
 
   listDuplicates: () => invoke<DuplicateGroupDto[]>("list_duplicates"),
   previewRenames: () => invoke<RenamePlanEntryDto[]>("preview_renames"),
