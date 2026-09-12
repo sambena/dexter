@@ -4,6 +4,9 @@ import type {
   DatFolderImportSummary,
   DatImportSummary,
   DatSourceDto,
+  DuplicateGroupDto,
+  MaintenanceSummary,
+  RenamePlanEntryDto,
   RomDetailsDto,
   RomFilter,
   RomListItemDto,
@@ -39,6 +42,11 @@ export const api = {
 
   listRoms: (filter: RomFilter) => invoke<RomListItemDto[]>("list_roms", { filter }),
   getRomDetails: (romId: number) => invoke<RomDetailsDto | null>("get_rom_details", { romId }),
+
+  listDuplicates: () => invoke<DuplicateGroupDto[]>("list_duplicates"),
+  previewRenames: () => invoke<RenamePlanEntryDto[]>("preview_renames"),
+  applyRenames: (romIds: number[]) => invoke<MaintenanceSummary>("apply_renames", { romIds }),
+  deleteRoms: (romIds: number[]) => invoke<MaintenanceSummary>("delete_roms", { romIds }),
 
   hasKnownBoxArtSource: (folderName: string) => invoke<boolean>("has_known_box_art_source", { folderName }),
   getBoxArt: (romId: number) => invoke<string | null>("get_box_art", { romId }),

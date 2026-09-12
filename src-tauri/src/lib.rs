@@ -59,6 +59,10 @@ pub fn run() {
             commands::art::pick_and_set_box_art,
             commands::roms::list_roms,
             commands::roms::get_rom_details,
+            commands::maintenance::list_duplicates,
+            commands::maintenance::preview_renames,
+            commands::maintenance::apply_renames,
+            commands::maintenance::delete_roms,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

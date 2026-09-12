@@ -510,3 +510,112 @@ button {
     animation-duration: 0s;
   }
 }
+
+.modal-tabs {
+  display: flex;
+  gap: 0.25rem;
+  flex-shrink: 0;
+  padding: 0 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-tabs button {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 0.5rem 0.75rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.modal-tabs button.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.tools-actions {
+  margin-top: 0.75rem;
+}
+
+.dupe-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.dupe-group {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.5rem 0.6rem;
+}
+
+.dupe-group-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  margin-bottom: 0.35rem;
+}
+
+.dupe-hash {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+
+.dupe-file {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.15rem 0;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.dupe-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.dupe-meta {
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.rename-table td {
+  font-size: 0.78rem;
+  word-break: break-word;
+}
+
+.rename-blocked td {
+  color: var(--text-muted);
+}
+
+.rename-reason {
+  padding: 0;
+  font-size: 0.72rem;
+}
+
+.details-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.details-actions-note {
+  padding: 0;
+  font-size: 0.75rem;
+}
+
+button.danger {
+  color: #d1453a;
+}

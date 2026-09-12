@@ -1,4 +1,6 @@
-use crate::models::{RomDetailsDto, RomFilter, RomListItemDto, Settings, SystemDto};
+use crate::models::{
+    DuplicateFileDto, DuplicateGroupDto, RomDetailsDto, RomFilter, RomListItemDto, Settings, SystemDto,
+};
 use rusqlite::{params, Connection, OptionalExtension};
 
 // ---------- settings ----------
@@ -660,4 +662,143 @@ pub fn list_matched_games_missing_art(conn: &Connection) -> rusqlite::Result<Vec
         })
     })?;
     rows.collect()
+}
+
+// ---------- maintenance ----------
+
+/// Groups of files that are byte-identical (same SHA1). Only exact copies are
+/// reported: any one of them is safely disposable, which isn't true of files
+/// that merely match the same DAT game.
+pub fn list_duplicate_groups(conn: &Connection) -> rusqlite::Result<Vec<DuplicateGroupDto>> {
+    let mut stmt = conn.prepare(
+        "SELECT r.sha1, r.id, r.file_name, r.file_path, r.archive_member, r.size,
+                s.name, dg.name
+         FROM roms r
+         LEFT JOIN systems s ON s.id = r.system_id
+         LEFT JOIN dat_roms dr ON dr.id = r.dat_rom_id
+         LEFT JOIN dat_games dg ON dg.id = dr.dat_game_id
+         WHERE r.sha1 IS NOT NULL AND r.sha1 <> ''
+           AND r.sha1 IN (SELECT sha1 FROM roms
+                          WHERE sha1 IS NOT NULL AND sha1 <> ''
+                          GROUP BY sha1 HAVING COUNT(*) > 1)
+         ORDER BY r.sha1, r.file_path",
+    )?;
+
+    let rows = stmt.query_map([], |r| {
+        let sha1: String = r.get(0)?;
+        let file_name: String = r.get(2)?;
+        let dat_name: Option<String> = r.get(7)?;
+        let display_name = dat_name
+            .unwrap_or_else(|| crate::dat::filename::parse_filename_metadata(&file_name).title);
+        Ok((
+            sha1,
+            DuplicateFileDto {
+                id: r.get(1)?,
+                display_name,
+                file_name,
+                file_path: r.get(3)?,
+                archive_member: r.get(4)?,
+                size: r.get(5)?,
+                system_name: r.get(6)?,
+            },
+        ))
+    })?;
+
+    let mut groups: Vec<DuplicateGroupDto> = Vec::new();
+    for row in rows {
+        let (sha1, file) = row?;
+        match groups.last_mut() {
+            Some(g) if g.sha1 == sha1 => g.files.push(file),
+            _ => groups.push(DuplicateGroupDto { sha1, files: vec![file] }),
+        }
+    }
+    Ok(groups)
+}
+
+pub struct RenameCandidate {
+    pub rom_id: i64,
+    pub file_path: String,
+    pub file_name: String,
+    pub archive_member: Option<String>,
+    pub dat_rom_name: String,
+    pub dat_game_name: String,
+}
+
+/// Matched ROMs together with the DAT's canonical names, for building a
+/// rename plan. Unmatched ROMs have no authoritative name so are excluded.
+pub fn list_rename_candidates(conn: &Connection) -> rusqlite::Result<Vec<RenameCandidate>> {
+    let mut stmt = conn.prepare(
+        "SELECT r.id, r.file_path, r.file_name, r.archive_member, dr.name, dg.name
+         FROM roms r
+         JOIN dat_roms dr ON dr.id = r.dat_rom_id
+         JOIN dat_games dg ON dg.id = dr.dat_game_id
+         WHERE r.match_status = 'matched'
+         ORDER BY r.file_path",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(RenameCandidate {
+            rom_id: r.get(0)?,
+            file_path: r.get(1)?,
+            file_name: r.get(2)?,
+            archive_member: r.get(3)?,
+            dat_rom_name: r.get(4)?,
+            dat_game_name: r.get(5)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// ROM rows key archive members as "<archive path>::<member>", so file_path is
+/// a composite key rather than something that exists on disk. Anything that
+/// touches the filesystem has to collapse to the archive path first, and these
+/// helpers match every row backed by that one file.
+pub fn count_roms_for_file(conn: &Connection, file_path: &str) -> rusqlite::Result<i64> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM roms
+         WHERE file_path = ?1 OR SUBSTR(file_path, 1, LENGTH(?1) + 2) = ?1 || '::'",
+        params![file_path],
+        |r| r.get(0),
+    )
+}
+
+pub fn get_rom_file_info(
+    conn: &Connection,
+    rom_id: i64,
+) -> rusqlite::Result<Option<(String, Option<String>, String)>> {
+    conn.query_row(
+        "SELECT file_path, archive_member, file_name FROM roms WHERE id = ?1",
+        params![rom_id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )
+    .optional()
+}
+
+pub fn delete_rom_rows_for_file(conn: &Connection, file_path: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM roms
+         WHERE file_path = ?1 OR SUBSTR(file_path, 1, LENGTH(?1) + 2) = ?1 || '::'",
+        params![file_path],
+    )?;
+    Ok(())
+}
+
+/// Repoints rom rows after the underlying file has been renamed on disk. A
+/// loose ROM takes the new name directly; archive members keep their own
+/// file_name (the member) and only have the archive part of the key rewritten.
+pub fn update_rom_file_path(
+    conn: &Connection,
+    old_path: &str,
+    new_path: &str,
+    new_file_name: &str,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE roms SET file_path = ?2, file_name = ?3 WHERE file_path = ?1",
+        params![old_path, new_path, new_file_name],
+    )?;
+    conn.execute(
+        "UPDATE roms SET file_path = ?2 || SUBSTR(file_path, LENGTH(?1) + 1)
+         WHERE SUBSTR(file_path, 1, LENGTH(?1) + 2) = ?1 || '::'",
+        params![old_path, new_path],
+    )?;
+    Ok(())
 }

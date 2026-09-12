@@ -114,3 +114,39 @@ pub struct ArtFetchSummary {
     pub not_found: i64,
     pub errors: Vec<String>,
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DuplicateFileDto {
+    pub id: i64,
+    pub display_name: String,
+    pub file_name: String,
+    pub file_path: String,
+    pub archive_member: Option<String>,
+    pub system_name: Option<String>,
+    pub size: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DuplicateGroupDto {
+    pub sha1: String,
+    pub files: Vec<DuplicateFileDto>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RenamePlanEntryDto {
+    pub rom_id: i64,
+    pub current_name: String,
+    pub new_name: String,
+    /// Absolute path of the file that would actually be renamed. For a ROM
+    /// inside an archive this is the archive, not the member.
+    pub target_path: String,
+    /// Set when the entry can't be renamed; the UI shows it and disables it.
+    pub blocked_reason: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct MaintenanceSummary {
+    pub succeeded: i64,
+    pub skipped: i64,
+    pub errors: Vec<String>,
+}

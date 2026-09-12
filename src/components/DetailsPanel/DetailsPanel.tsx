@@ -127,8 +127,40 @@ function matchStatusExplanation(details: RomDetailsDto, hasDat: boolean, folderN
 }
 
 export function DetailsPanel() {
-  const { selectedRomId, systems } = useLibrary();
+  const { selectedRomId, systems, setSelectedRomId, refreshRoms } = useLibrary();
+  const { startJob, endJob } = useJob();
   const [details, setDetails] = useState<RomDetailsDto | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  async function deleteRom(rom: RomDetailsDto) {
+    const ok = window.confirm(
+      `Send this file to the Recycle Bin?
+
+${rom.file_path}
+
+` +
+        `It can be restored from Windows if this was a mistake.`,
+    );
+    if (!ok) return;
+    setDeleting(true);
+    setActionError(null);
+    startJob("Deleting ROM");
+    try {
+      const summary = await api.deleteRoms([rom.id]);
+      if (summary.succeeded > 0) {
+        setSelectedRomId(null);
+      } else {
+        setActionError(summary.errors.join("; ") || "Nothing was deleted.");
+      }
+      await refreshRoms();
+    } catch (e) {
+      setActionError(String(e));
+    } finally {
+      endJob();
+      setDeleting(false);
+    }
+  }
 
   useEffect(() => {
     if (selectedRomId == null) {
@@ -216,6 +248,14 @@ export function DetailsPanel() {
         <dt>SHA1</dt>
         <dd className="mono">{details.sha1 ?? "—"}</dd>
       </dl>
+      <div className="details-actions">
+        <button onClick={() => deleteRom(details)} disabled={deleting} className="danger">
+          {deleting && <span className="spinner inline" aria-hidden="true" />}
+          Delete…
+        </button>
+        <span className="hint details-actions-note">Deleted files go to the Recycle Bin.</span>
+      </div>
+      {actionError && <p className="hint box-art-error">{actionError}</p>}
     </div>
   );
 }

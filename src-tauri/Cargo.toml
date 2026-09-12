@@ -37,6 +37,7 @@ anyhow = "1"
 chrono = "0.4"
 regex = "1"
 base64 = "0.22"
+trash = "5"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

@@ -96,3 +96,32 @@ export interface DatFolderImportSummary {
   unmatched: string[];
   errors: string[];
 }
+
+export interface DuplicateFileDto {
+  id: number;
+  display_name: string;
+  file_name: string;
+  file_path: string;
+  archive_member: string | null;
+  system_name: string | null;
+  size: number | null;
+}
+
+export interface DuplicateGroupDto {
+  sha1: string;
+  files: DuplicateFileDto[];
+}
+
+export interface RenamePlanEntryDto {
+  rom_id: number;
+  current_name: string;
+  new_name: string;
+  target_path: string;
+  blocked_reason: string | null;
+}
+
+export interface MaintenanceSummary {
+  succeeded: number;
+  skipped: number;
+  errors: string[];
+}

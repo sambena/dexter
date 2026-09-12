@@ -14,7 +14,13 @@ type Summary =
 const emptyScanSummary: ScanSummary = { scanned_files: 0, pending: 0, matched: 0, unmatched: 0, removed: 0, errors: [] };
 const emptyArtSummary: ArtFetchSummary = { attempted: 0, downloaded: 0, not_found: 0, errors: [] };
 
-export function TopBar({ onOpenSettings }: { onOpenSettings: () => void }) {
+export function TopBar({
+  onOpenSettings,
+  onOpenTools,
+}: {
+  onOpenSettings: () => void;
+  onOpenTools: () => void;
+}) {
   const { settings, refreshRoms, refreshSystems } = useLibrary();
   const { startJob, updateJob, endJob } = useJob();
   const [activeJob, setActiveJob] = useState<Job>(null);
@@ -133,6 +139,9 @@ export function TopBar({ onOpenSettings }: { onOpenSettings: () => void }) {
         </button>
         <button onClick={handleDownloadArt} disabled={activeJob !== null}>
           {activeJob === "art" ? "Downloading…" : "Download Box Art"}
+        </button>
+        <button onClick={onOpenTools} disabled={activeJob !== null}>
+          Tools
         </button>
         <button onClick={onOpenSettings}>Settings</button>
       </div>
