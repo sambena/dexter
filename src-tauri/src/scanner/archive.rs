@@ -26,6 +26,21 @@ pub fn list_zip_entries(path: &Path) -> anyhow::Result<Vec<ArchiveEntryMeta>> {
     Ok(results)
 }
 
+/// Reads a single named entry inside a .zip into memory, refusing entries
+/// bigger than `max_bytes`.
+pub fn read_zip_member(zip_path: &Path, entry_name: &str, max_bytes: u64) -> anyhow::Result<Vec<u8>> {
+    use std::io::Read;
+    let file = File::open(zip_path)?;
+    let mut archive = zip::ZipArchive::new(file)?;
+    let mut entry = archive.by_name(entry_name)?;
+    if entry.size() > max_bytes {
+        anyhow::bail!("{} is too big to load ({} bytes)", entry_name, entry.size());
+    }
+    let mut bytes = Vec::with_capacity(entry.size() as usize);
+    entry.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
 /// Hashes a single named entry inside a .zip — used by the hashing pass.
 pub fn hash_zip_member(zip_path: &Path, entry_name: &str) -> anyhow::Result<FileHashes> {
     let file = File::open(zip_path)?;

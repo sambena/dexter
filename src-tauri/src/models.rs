@@ -87,6 +87,10 @@ pub struct RomDetailsDto {
     /// Bytes past the ROM data at the end of the file, also skipped for matching.
     pub trailer_size: Option<i64>,
     pub emulator_core: Option<String>,
+    /// How a match was found when the file isn't byte-for-byte the DAT's
+    /// dump: "overdump", "header", "mirrored" (see scanner::repair) or
+    /// "cue-tracks" (a cue sheet whose tracks all matched).
+    pub match_note: Option<String>,
 }
 
 /// One way to run a system, as offered in the emulator dropdown.

@@ -48,6 +48,8 @@ export interface RomDetailsDto {
   headerless_crc32: string | null;
   trailer_size: number | null;
   emulator_core: string | null;
+  /** How a match was found when the file isn't the DAT's exact dump. */
+  match_note: "overdump" | "header" | "mirrored" | "cue-tracks" | null;
 }
 
 export interface RomFilter {

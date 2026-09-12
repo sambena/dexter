@@ -169,7 +169,56 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     if version < 8 {
         conn.execute_batch(&format!("BEGIN; {} PRAGMA user_version = 8; COMMIT;", SCHEMA_V8))?;
     }
+    if version < 9 {
+        migrate_v9_repairs(conn)?;
+    }
     Ok(())
+}
+
+const SCHEMA_V9: &str = r#"
+-- How a match was found when the file isn't byte-for-byte the DAT's dump
+-- ("overdump", "header", "mirrored", "cue-tracks"). NULL for exact matches.
+ALTER TABLE roms ADD COLUMN match_note TEXT;
+
+-- Hash & Match can now find the dump inside overdumped or oddly headered
+-- cartridge files, and match cue sheets by their tracks, so unmatched ones
+-- get another try. 64 MiB is the largest cartridge (scanner::repair).
+UPDATE roms SET match_status = 'pending'
+ WHERE match_status IN ('unmatched', 'error')
+   AND (size <= 67108864 OR LOWER(file_name) LIKE '%.cue' OR LOWER(file_name) LIKE '%.gdi');
+"#;
+
+/// v9: repairs and cue sheets (see SCHEMA_V9), plus two format changes:
+/// .ecm files are now decoded and hashed, and Switch files can't be verified.
+fn migrate_v9_repairs(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch("BEGIN;")?;
+    let result = (|| {
+        conn.execute_batch(SCHEMA_V9)?;
+        let rows: Vec<(i64, String, String)> = {
+            let mut stmt = conn.prepare(
+                "SELECT id, file_name, match_status FROM roms
+                 WHERE match_status IN ('unmatched', 'pending', 'error', 'unverifiable') AND size IS NOT NULL",
+            )?;
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        for (id, file_name, status) in rows {
+            let unverifiable = crate::scanner::formats::is_unverifiable(&file_name);
+            if unverifiable && status != "unverifiable" {
+                conn.execute("UPDATE roms SET match_status = 'unverifiable', dat_rom_id = NULL WHERE id = ?1", [id])?;
+            } else if !unverifiable && status == "unverifiable" && crate::scanner::ecm::decoded_name(&file_name).is_some() {
+                conn.execute("UPDATE roms SET match_status = 'pending' WHERE id = ?1", [id])?;
+            }
+        }
+        conn.execute_batch("PRAGMA user_version = 9;")
+    })();
+    match result {
+        Ok(()) => conn.execute_batch("COMMIT;"),
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK;");
+            Err(e)
+        }
+    }
 }
 
 const SCHEMA_V8: &str = r#"
@@ -246,7 +295,43 @@ mod tests {
         assert_eq!(status("Contra.nes"), "matched");
         assert_eq!(status("Metroid.gba"), "unmatched");
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(version, 8);
+        assert_eq!(version, 9);
+    }
+
+    #[test]
+    fn v9_requeues_repairable_roms_and_reclassifies_formats() {
+        let conn = Connection::open_in_memory().unwrap();
+        for sql in [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V8] {
+            conn.execute_batch(sql).unwrap();
+        }
+        conn.execute_batch(
+            "PRAGMA user_version = 8;
+             INSERT INTO roms (file_path, file_name, size, crc32, match_status, last_scanned_at) VALUES
+               ('a', 'Asteroids Hyper 64 (U) [!].z64', 8388608, 'aa', 'unmatched', ''),
+               ('b', 'Pokemon X.3ds', 2147483648, 'bb', 'unmatched', ''),
+               ('c', 'FF5.cue', 120, 'cc', 'unmatched', ''),
+               ('d', 'FF7 (Disc 1).bin.ecm', 400000000, 'dd', 'unverifiable', ''),
+               ('e', 'TOTK 1.2.0.nsp', 336947536, 'ee', 'unmatched', ''),
+               ('f', 'F-Zero GX (USA).rvz', 1000000, 'ff', 'unverifiable', ''),
+               ('g', 'Tetris (World).gb', 65536, '11', 'matched', '');
+             INSERT INTO roms (file_path, file_name, match_status, last_scanned_at) VALUES
+               ('h', 'MARIO KART 8 [AMKE01]', 'unverifiable', '');",
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+
+        let status = |name: &str| -> String {
+            conn.query_row("SELECT match_status FROM roms WHERE file_name = ?1", [name], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(status("Asteroids Hyper 64 (U) [!].z64"), "pending");
+        assert_eq!(status("Pokemon X.3ds"), "unmatched");
+        assert_eq!(status("FF5.cue"), "pending");
+        assert_eq!(status("FF7 (Disc 1).bin.ecm"), "pending");
+        assert_eq!(status("TOTK 1.2.0.nsp"), "unverifiable");
+        assert_eq!(status("F-Zero GX (USA).rvz"), "unverifiable");
+        assert_eq!(status("Tetris (World).gb"), "matched");
+        assert_eq!(status("MARIO KART 8 [AMKE01]"), "unverifiable");
     }
 
     #[test]
@@ -275,8 +360,9 @@ mod tests {
         };
         assert_eq!(status("F-Zero GX (USA).rvz"), "unverifiable");
         assert_eq!(status("MARIO KART 8 [AMKE01]"), "unverifiable");
-        assert_eq!(status("FF7 (Disc 1).bin.ecm"), "unverifiable");
-        assert_eq!(status("Super Mario 64.z64"), "unmatched");
+        // v9 made .ecm hashable again, and requeues small unmatched files.
+        assert_eq!(status("FF7 (Disc 1).bin.ecm"), "pending");
+        assert_eq!(status("Super Mario 64.z64"), "pending");
         assert_eq!(status("Pending Game.sfc"), "pending");
         assert_eq!(status("Weird.rvz"), "matched");
     }
@@ -298,7 +384,8 @@ mod tests {
         )
         .unwrap();
 
-        migrate(&conn).unwrap();
+        // Just v6: v9 requeues every small unmatched file anyway.
+        conn.execute_batch(SCHEMA_V6).unwrap();
 
         let status = |name: &str| -> String {
             conn.query_row("SELECT match_status FROM roms WHERE file_name = ?1", [name], |r| r.get(0))

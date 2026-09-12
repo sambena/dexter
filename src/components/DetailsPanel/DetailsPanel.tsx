@@ -93,27 +93,77 @@ function BoxArt({ details }: { details: RomDetailsDto }) {
 }
 
 // Systems No-Intro splits into multiple DAT variants that hash differently
-// for the same games (usually by byte order) — worth calling out directly
-// since there's no way to know this without hitting a wall of "unmatched".
+// for the same games — worth calling out directly since there's no way to
+// know this without hitting a wall of "unmatched".
+const N64_HINT =
+  "No-Intro splits Nintendo 64 into BigEndian (.z64), ByteSwapped (.v64) and LittleEndian (.n64) DATs, and the same game hashes differently in each. Import the one matching your files' format.";
+const THREE_DS_HINT =
+  "No-Intro has separate Encrypted and Decrypted DATs for Nintendo 3DS, and a game hashes differently in each. Most dumps shared today are decrypted (for Citra/Azahar), so if you imported the Encrypted DAT, import the Decrypted one too.";
 const MULTI_VARIANT_SYSTEM_HINTS: Record<string, string> = {
-  n64: "Nintendo 64 is split by No-Intro into separate BigEndian/ByteSwapped/LittleEndian DAT sets — the same game hashes differently in each. If you've only imported one variant, try importing the others too (a system can now have multiple DATs).",
-  nintendo64: "Nintendo 64 is split by No-Intro into separate BigEndian/ByteSwapped/LittleEndian DAT sets — the same game hashes differently in each. If you've only imported one variant, try importing the others too (a system can now have multiple DATs).",
+  n64: N64_HINT,
+  nintendo64: N64_HINT,
+  "3ds": THREE_DS_HINT,
+  nintendo3ds: THREE_DS_HINT,
 };
 
 function normalizeFolderKey(folderName: string): string {
   return folderName.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${+(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  if (bytes >= 1024) return `${+(bytes / 1024).toFixed(1)} KB`;
+  return `${bytes} bytes`;
+}
+
+/** Why a matched file isn't byte-for-byte the DAT's dump, when that's the case. */
+function matchNoteExplanation(details: RomDetailsDto): string | null {
+  const trailer = details.trailer_size ?? 0;
+  switch (details.match_note) {
+    case "overdump":
+      return `Overdump: the verified game data is followed by ${formatBytes(trailer)} of extra data from reading the cartridge past its end. Emulators ignore it, so it plays the same as the verified dump.`;
+    case "header":
+      return `This file has a ${formatBytes(details.header_size ?? 0)} header in front of the game data, added by an old copier device. Without it, the data is the verified dump.`;
+    case "mirrored":
+      return "This old dump stores the cartridge's chips twice over (a mirrored dump). With the repeats removed, it's the verified dump.";
+    case "cue-tracks":
+      return "This cue sheet's own text differs from Redump's (usually just the track file names), but every track it loads is a verified dump of this game.";
+    default:
+      return null;
+  }
+}
+
+// GoodTools marked altered copies with bracketed codes. No-Intro only lists
+// unaltered dumps, so these explain themselves.
+const GOODTOOLS_FLAGS: [RegExp, string][] = [
+  [/\[b\d*\]/i, "a bad dump (damaged or incomplete)"],
+  [/\[f\d*\]/i, "a \"fixed\" copy, changed so it runs on old emulators or copiers"],
+  [/\[h[^\]]*\]/i, "a hack (modified game)"],
+  [/\[p\d*\]/i, "a pirate release"],
+  [/\[t\d*\]/i, "a copy with a cheat trainer added"],
+  [/\[o\d*\]/i, "an overdump"],
+  [/\[a\d*\]/i, "an alternate dump that differs from the verified one"],
+  [/\[T[+-][^\]]*\]/, "a fan translation"],
+];
+
+function goodToolsExplanation(fileName: string): string | null {
+  const found = GOODTOOLS_FLAGS.filter(([pattern]) => pattern.test(fileName)).map(([, meaning]) => meaning);
+  if (!found.length) return null;
+  return `The file name's GoodTools tags mark it as ${found.join(" and ")}. DATs only list unaltered dumps, so a copy like this won't match. The verified version of the game can replace it.`;
+}
+
 function matchStatusExplanation(details: RomDetailsDto, hasDat: boolean, folderName?: string): string | null {
   switch (details.match_status) {
     case "matched":
-      return null;
+      return matchNoteExplanation(details);
     case "pending":
       return "Found by Scan Files but not hashed yet — run Hash & Match.";
     case "unverifiable":
       return details.archive_member == null && !/\.[a-z0-9]{1,6}$/i.test(details.file_name)
         ? "This is an extracted title folder (thousands of files), which no DAT describes as one dump, so it can't be verified."
-        : "This format can't be checked against a DAT: compressed or trimmed disc images (.rvz, .wbfs, .chd, …) and .ecm files store the disc re-encoded, and Dexter can't look inside .rar or .7z. To verify it, convert it back to the original dump (e.g. .iso or .bin/.cue) and re-scan.";
+        : /\.(nsp|xci|nsz|xcz)$/i.test(details.file_name)
+          ? "Switch game files can't be checked against a DAT: every dump carries data specific to the console or dumping tool (tickets, cartridge padding), so no two copies of a game hash the same."
+          : "This format can't be checked against a DAT: compressed or trimmed disc images (.rvz, .wbfs, .chd, …) store the disc re-encoded, and Dexter can't look inside .rar or .7z. To verify it, convert it back to the original dump (e.g. .iso, or .bin/.cue) and re-scan.";
     case "error":
       return "Hashing failed last time (e.g. a network read error). Hash & Match will retry it automatically.";
     case "unmatched": {
@@ -123,6 +173,7 @@ function matchStatusExplanation(details: RomDetailsDto, hasDat: boolean, folderN
       const base =
         "This file's hash didn't match any entry in the imported DAT for this system — it may be a modified/bad dump, a version the DAT doesn't list, or a homebrew/hack.";
       const hints = [
+        goodToolsExplanation(details.archive_member ?? details.file_name),
         folderName ? MULTI_VARIANT_SYSTEM_HINTS[normalizeFolderKey(folderName)] : undefined,
         details.header_size != null
           ? "The file has a header, and neither the whole file nor the data without it matched. For NES, No-Intro's Headerless DAT is the most reliable, since old dumps often have junk in their headers."
@@ -270,14 +321,22 @@ ${rom.file_path}
 
         {details.header_size != null && (
           <>
-            <dt>Header</dt>
-            <dd title="DATs usually hash ROM data without these bytes, so matching tries both.">
-              {details.header_size} bytes
-              {details.trailer_size ? `, plus ${details.trailer_size} trailing bytes,` : ""} skipped for matching
+            <dt>Skipped</dt>
+            <dd title="Bytes that aren't part of the game data DATs hash, so matching leaves them out.">
+              {[
+                details.header_size ? `${formatBytes(details.header_size)} header` : null,
+                details.trailer_size
+                  ? details.match_note === "mirrored"
+                    ? `${formatBytes(details.trailer_size)} of repeated chip data`
+                    : `${formatBytes(details.trailer_size)} at the end`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(", ") || "Nothing"}
               {details.headerless_crc32 && (
                 <>
                   {" "}
-                  (CRC32 without: <span className="mono">{details.headerless_crc32}</span>)
+                  (CRC32 of the rest: <span className="mono">{details.headerless_crc32}</span>)
                 </>
               )}
             </dd>

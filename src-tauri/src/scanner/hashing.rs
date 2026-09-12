@@ -81,24 +81,25 @@ pub fn detect_framing(file_name: &str, size: Option<u64>, start: &[u8]) -> Optio
     }
 }
 
-struct Hasher {
+#[derive(Clone)]
+pub(crate) struct Hasher {
     crc: crc32fast::Hasher,
     md5: Md5,
     sha1: Sha1,
 }
 
 impl Hasher {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Hasher { crc: crc32fast::Hasher::new(), md5: Md5::new(), sha1: Sha1::new() }
     }
 
-    fn update(&mut self, bytes: &[u8]) {
+    pub(crate) fn update(&mut self, bytes: &[u8]) {
         self.crc.update(bytes);
         self.md5.update(bytes);
         self.sha1.update(bytes);
     }
 
-    fn finish(self) -> Digests {
+    pub(crate) fn finish(self) -> Digests {
         Digests {
             crc32: format!("{:08x}", self.crc.finalize()),
             md5: format!("{:x}", self.md5.finalize()),
@@ -165,6 +166,12 @@ pub fn hash_file(path: &Path) -> std::io::Result<FileHashes> {
     let file = std::fs::File::open(path)?;
     let size = file.metadata().ok().map(|m| m.len());
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    // An ECM file is hashed as the image it decodes to, whose size isn't
+    // known until it's decoded.
+    if let Some(decoded) = crate::scanner::ecm::decoded_name(name) {
+        let reader = crate::scanner::ecm::EcmReader::new(std::io::BufReader::with_capacity(1 << 20, file));
+        return hash_reader(reader, decoded, None);
+    }
     hash_reader(file, name, size)
 }
 

@@ -298,27 +298,34 @@ pub fn rematch_system(conn: &mut Connection, system_id: i64) -> rusqlite::Result
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
 
-    let mut newly_matched = 0i64;
-    let mut now_unmatched = 0i64;
     let tx = conn.transaction()?;
     for rom in &hashed {
         let dat_rom_id = match_rom_hashes(&tx, system_id, &rom.full, rom.headerless.as_ref())?;
-        let is_matched = dat_rom_id.is_some();
-        if is_matched && !rom.was_matched {
-            newly_matched += 1;
-        } else if !is_matched && rom.was_matched {
-            now_unmatched += 1;
-        }
         tx.execute(
             "UPDATE roms SET dat_rom_id = ?1, match_status = ?2 WHERE id = ?3",
             params![
                 dat_rom_id,
-                if is_matched { "matched" } else { "unmatched" },
+                if dat_rom_id.is_some() { "matched" } else { "unmatched" },
                 rom.id
             ],
         )?;
     }
     tx.commit()?;
+    // Cue sheets never match by their own hash, so the loop above just
+    // marked them unmatched; they match again through their tracks.
+    match_track_lists(conn, Some(system_id))?;
+
+    let mut newly_matched = 0i64;
+    let mut now_unmatched = 0i64;
+    for rom in &hashed {
+        let is_matched: bool =
+            conn.query_row("SELECT match_status = 'matched' FROM roms WHERE id = ?1", params![rom.id], |r| r.get(0))?;
+        if is_matched && !rom.was_matched {
+            newly_matched += 1;
+        } else if !is_matched && rom.was_matched {
+            now_unmatched += 1;
+        }
+    }
     Ok((newly_matched, now_unmatched))
 }
 
@@ -497,7 +504,7 @@ pub fn update_rom_hash(
     conn.execute(
         "UPDATE roms SET size = ?1, crc32 = ?2, md5 = ?3, sha1 = ?4, dat_rom_id = ?5, match_status = ?6, last_scanned_at = ?7,
                 header_size = ?8, headerless_crc32 = ?9, headerless_md5 = ?10, headerless_sha1 = ?11,
-                trailer_size = ?13
+                trailer_size = ?13, match_note = NULL
          WHERE id = ?12",
         params![
             hashes.size as i64,
@@ -516,6 +523,143 @@ pub fn update_rom_hash(
         ],
     )?;
     Ok(())
+}
+
+/// Distinct ROM sizes in a system's DATs: the only sizes an overdump could be
+/// trimmed to.
+pub fn dat_rom_sizes(conn: &Connection, system_id: i64) -> rusqlite::Result<Vec<u64>> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT dr.size FROM dat_roms dr
+         JOIN dat_games dg ON dg.id = dr.dat_game_id
+         JOIN dat_sources ds ON ds.id = dg.dat_source_id
+         WHERE ds.system_id = ?1 AND dr.size > 0",
+    )?;
+    let rows = stmt.query_map(params![system_id], |r| r.get::<_, i64>(0))?;
+    rows.map(|r| r.map(|s| s as u64)).collect()
+}
+
+/// Like find_dat_rom_match, but every hash the DAT lists must agree, not just
+/// the CRC32. Repairs try many readings of one file, so a lone CRC32
+/// coincidence is too likely to trust.
+pub fn find_dat_rom_exact(conn: &Connection, system_id: i64, digests: &Digests) -> rusqlite::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT dr.id FROM dat_roms dr
+         JOIN dat_games dg ON dg.id = dr.dat_game_id
+         JOIN dat_sources ds ON ds.id = dg.dat_source_id
+         WHERE ds.system_id = ?1 AND dr.crc32 = ?2
+           AND (dr.sha1 IS NULL OR dr.sha1 = ?3)
+           AND (dr.md5 IS NULL OR dr.md5 = ?4)
+           AND (dr.sha1 IS NOT NULL OR dr.md5 IS NOT NULL)
+         LIMIT 1",
+        params![system_id, digests.crc32, digests.sha1, digests.md5],
+        |r| r.get(0),
+    )
+    .optional()
+}
+
+/// Records a match found by reading the file differently (scanner::repair).
+/// The repaired digests go where headerless ones do, so re-matching after a
+/// DAT import finds the same entry.
+pub fn set_repaired_match(
+    conn: &Connection,
+    rom_id: i64,
+    repaired: &crate::scanner::repair::Repaired,
+    dat_rom_id: i64,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE roms SET dat_rom_id = ?1, match_status = 'matched', match_note = ?2,
+                header_size = ?3, trailer_size = ?4,
+                headerless_crc32 = ?5, headerless_md5 = ?6, headerless_sha1 = ?7
+         WHERE id = ?8",
+        params![
+            dat_rom_id,
+            repaired.kind.as_str(),
+            repaired.header_size as i64,
+            repaired.trailer_size as i64,
+            repaired.digests.crc32,
+            repaired.digests.md5,
+            repaired.digests.sha1,
+            rom_id
+        ],
+    )?;
+    Ok(())
+}
+
+/// Matches unmatched cue sheets (and .gdi files) by the tracks they load: when
+/// every track is a matched dump of the same DAT game, so is the sheet. It's
+/// linked to that game's own cue entry where the DAT lists one. Returns how
+/// many were matched.
+pub fn match_track_lists(conn: &Connection, system_id: Option<i64>) -> rusqlite::Result<i64> {
+    use crate::scanner::cue;
+
+    let sheets: Vec<(i64, String, String)> = {
+        let mut stmt = conn.prepare(
+            "SELECT id, file_path, file_name FROM roms
+             WHERE match_status = 'unmatched' AND archive_member IS NULL
+               AND (LOWER(file_name) LIKE '%.cue' OR LOWER(file_name) LIKE '%.gdi')
+               AND (?1 IS NULL OR system_id = ?1)",
+        )?;
+        let rows = stmt.query_map(params![system_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+
+    let mut matched = 0;
+    for (id, path, name) in sheets {
+        let path = std::path::Path::new(&path);
+        let too_big = std::fs::metadata(path).map_or(true, |m| m.len() > cue::MAX_CUE_BYTES);
+        let Some(text) = (!too_big).then(|| std::fs::read(path).ok()).flatten() else {
+            continue;
+        };
+        let tracks = cue::referenced_files(&name, &String::from_utf8_lossy(&text));
+        let Some(dir) = path.parent() else { continue };
+        if tracks.is_empty() {
+            continue;
+        }
+
+        let mut game: Option<i64> = None;
+        let mut first_track_dat_rom = None;
+        let mut all_matched = true;
+        for track in &tracks {
+            let track_path = dir.join(track).to_string_lossy().to_string();
+            let found: Option<(Option<i64>, Option<i64>)> = conn
+                .query_row(
+                    "SELECT r.dat_rom_id, dr.dat_game_id FROM roms r
+                     LEFT JOIN dat_roms dr ON dr.id = r.dat_rom_id
+                     WHERE LOWER(r.file_path) = LOWER(?1) AND r.match_status = 'matched'",
+                    params![track_path],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?;
+            match found {
+                Some((Some(dat_rom), Some(track_game))) if game.is_none_or(|g| g == track_game) => {
+                    game = Some(track_game);
+                    first_track_dat_rom.get_or_insert(dat_rom);
+                }
+                _ => {
+                    all_matched = false;
+                    break;
+                }
+            }
+        }
+        let (Some(game), Some(first_track_dat_rom), true) = (game, first_track_dat_rom, all_matched) else {
+            continue;
+        };
+        let sheet_entry: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM dat_roms WHERE dat_game_id = ?1
+                   AND (LOWER(name) LIKE '%.cue' OR LOWER(name) LIKE '%.gdi')
+                 ORDER BY id LIMIT 1",
+                params![game],
+                |r| r.get(0),
+            )
+            .optional()?;
+        conn.execute(
+            "UPDATE roms SET dat_rom_id = ?1, match_status = 'matched', match_note = 'cue-tracks' WHERE id = ?2",
+            params![sheet_entry.unwrap_or(first_track_dat_rom), id],
+        )?;
+        matched += 1;
+    }
+    Ok(matched)
 }
 
 pub fn mark_rom_hash_error(conn: &Connection, rom_id: i64) -> rusqlite::Result<()> {
@@ -586,7 +730,7 @@ pub fn get_rom_details(conn: &Connection, rom_id: i64) -> rusqlite::Result<Optio
         "SELECT r.id, r.file_name, r.file_path, r.archive_member, r.system_id, s.name,
                 dg.year, dg.region, dg.name, r.match_status,
                 r.crc32, r.md5, r.sha1, s.emulator_path, s.emulator_args,
-                r.header_size, r.headerless_crc32, r.trailer_size, s.emulator_core
+                r.header_size, r.headerless_crc32, r.trailer_size, s.emulator_core, r.match_note
          FROM roms r
          LEFT JOIN systems s ON s.id = r.system_id
          LEFT JOIN dat_roms dr ON dr.id = r.dat_rom_id
@@ -628,6 +772,7 @@ pub fn get_rom_details(conn: &Connection, rom_id: i64) -> rusqlite::Result<Optio
                 headerless_crc32: r.get(16)?,
                 trailer_size: r.get(17)?,
                 emulator_core: r.get(18)?,
+                match_note: r.get(19)?,
             })
         },
     )

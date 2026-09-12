@@ -1,8 +1,9 @@
 use crate::db::repo::{self, PendingRom};
 use crate::models::{ScanProgress, ScanSummary};
-use crate::scanner::{archive, hashing};
+use crate::scanner::{archive, hashing, repair};
 use crate::scanner::hashing::FileHashes;
 use crate::state::AppState;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -21,6 +22,51 @@ fn compute_hash(rom: &PendingRom) -> Result<FileHashes, String> {
     }
 }
 
+/// The whole ROM in memory, for trying repairs on a file that didn't match.
+fn read_rom_bytes(file_path: &str, archive_member: Option<&str>) -> Result<Vec<u8>, String> {
+    match archive_member {
+        Some(member) => {
+            let zip_path = &file_path[..file_path.len().saturating_sub(member.len() + 2)];
+            archive::read_zip_member(Path::new(zip_path), member, repair::MAX_REPAIR_BYTES).map_err(|e| e.to_string())
+        }
+        None => std::fs::read(file_path).map_err(|e| e.to_string()),
+    }
+}
+
+/// Looks for the DAT dump inside an unmatched cartridge file (see
+/// scanner::repair). DAT sizes are looked up once per system.
+fn find_repaired_match(
+    conn: &std::sync::Mutex<rusqlite::Connection>,
+    dat_sizes: &mut HashMap<i64, Vec<u64>>,
+    system_id: i64,
+    file_path: &str,
+    archive_member: Option<&str>,
+) -> Result<Option<(repair::Repaired, i64)>, String> {
+    let sizes = match dat_sizes.get(&system_id) {
+        Some(sizes) => sizes,
+        None => {
+            let conn = conn.lock().map_err(|e| e.to_string())?;
+            let sizes = repo::dat_rom_sizes(&conn, system_id).map_err(|e| e.to_string())?;
+            dat_sizes.entry(system_id).or_insert(sizes)
+        }
+    };
+    if sizes.is_empty() {
+        return Ok(None);
+    }
+    // A file that can't be read again is simply left unmatched.
+    let Ok(bytes) = read_rom_bytes(file_path, archive_member) else {
+        return Ok(None);
+    };
+    let candidates = repair::candidates(&bytes, sizes);
+    let conn = conn.lock().map_err(|e| e.to_string())?;
+    for candidate in candidates {
+        if let Some(dat_rom_id) = repo::find_dat_rom_exact(&conn, system_id, &candidate.digests).map_err(|e| e.to_string())? {
+            return Ok(Some((candidate, dat_rom_id)));
+        }
+    }
+    Ok(None)
+}
+
 fn partition_round_robin(items: Vec<PendingRom>, worker_count: usize) -> Vec<Vec<PendingRom>> {
     let mut chunks: Vec<Vec<PendingRom>> = (0..worker_count).map(|_| Vec::new()).collect();
     for (i, item) in items.into_iter().enumerate() {
@@ -33,6 +79,7 @@ struct HashResult {
     rom_id: i64,
     system_id: Option<i64>,
     file_path: String,
+    archive_member: Option<String>,
     outcome: Result<FileHashes, String>,
 }
 
@@ -76,6 +123,7 @@ pub async fn hash_pending_roms(app: tauri::AppHandle, state: State<'_, AppState>
                         rom_id: rom.id,
                         system_id: rom.system_id,
                         file_path: rom.file_path,
+                        archive_member: rom.archive_member,
                         outcome,
                     });
                 }
@@ -85,6 +133,7 @@ pub async fn hash_pending_roms(app: tauri::AppHandle, state: State<'_, AppState>
     drop(tx);
 
     let mut processed = 0usize;
+    let mut dat_sizes: HashMap<i64, Vec<u64>> = HashMap::new();
     for received in rx.iter() {
         processed += 1;
         let _ = app.emit(
@@ -92,24 +141,42 @@ pub async fn hash_pending_roms(app: tauri::AppHandle, state: State<'_, AppState>
             ScanProgress { current: processed, total, current_file: received.file_path.clone() },
         );
 
-        let conn = state.db.lock().map_err(|e| e.to_string())?;
         match received.outcome {
             Ok(h) => {
                 let dat_rom_id = match received.system_id {
                     Some(system_id) => {
+                        let conn = state.db.lock().map_err(|e| e.to_string())?;
                         let headerless = h.headerless.as_ref().map(|hl| &hl.digests);
                         repo::match_rom_hashes(&conn, system_id, &h.full, headerless).map_err(|e| e.to_string())?
                     }
                     None => None,
                 };
-                if dat_rom_id.is_some() {
+                // Re-reading happens without holding the database lock.
+                let repaired = match (dat_rom_id, received.system_id) {
+                    (None, Some(system_id)) if h.size <= repair::MAX_REPAIR_BYTES => find_repaired_match(
+                        &state.db,
+                        &mut dat_sizes,
+                        system_id,
+                        &received.file_path,
+                        received.archive_member.as_deref(),
+                    )?,
+                    _ => None,
+                };
+
+                let conn = state.db.lock().map_err(|e| e.to_string())?;
+                repo::update_rom_hash(&conn, received.rom_id, &h, dat_rom_id).map_err(|e| e.to_string())?;
+                if let Some((repaired, repaired_dat_rom_id)) = &repaired {
+                    repo::set_repaired_match(&conn, received.rom_id, repaired, *repaired_dat_rom_id)
+                        .map_err(|e| e.to_string())?;
+                }
+                if dat_rom_id.is_some() || repaired.is_some() {
                     summary.matched += 1;
                 } else {
                     summary.unmatched += 1;
                 }
-                repo::update_rom_hash(&conn, received.rom_id, &h, dat_rom_id).map_err(|e| e.to_string())?;
             }
             Err(e) => {
+                let conn = state.db.lock().map_err(|e| e.to_string())?;
                 repo::mark_rom_hash_error(&conn, received.rom_id).map_err(|e| e.to_string())?;
                 summary.errors.push(format!("{}: {}", received.file_path, e));
             }
@@ -119,6 +186,13 @@ pub async fn hash_pending_roms(app: tauri::AppHandle, state: State<'_, AppState>
 
     for handle in handles {
         let _ = handle.join();
+    }
+
+    {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        let sheets = repo::match_track_lists(&conn, None).map_err(|e| e.to_string())?;
+        summary.matched += sheets;
+        summary.unmatched = (summary.unmatched - sheets).max(0);
     }
 
     let _ = app.emit("hash://done", summary.clone());
