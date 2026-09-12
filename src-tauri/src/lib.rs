@@ -4,6 +4,7 @@ mod cli;
 mod commands;
 mod dat;
 mod db;
+mod emulators;
 mod models;
 mod scanner;
 mod state;
@@ -75,6 +76,10 @@ pub fn run() {
             commands::settings::pick_emulator_path,
             commands::settings::list_systems,
             commands::settings::set_system_emulator,
+            commands::emulators::get_emulator_setup,
+            commands::emulators::set_retroarch_path,
+            commands::emulators::set_system_emulator_choice,
+            commands::emulators::auto_configure_emulators,
             commands::dat::pick_dat_file,
             commands::dat::import_dat_file,
             commands::dat::pick_dat_folder,

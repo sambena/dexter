@@ -9,6 +9,8 @@ pub struct SystemDto {
     pub emulator_args: Option<String>,
     pub dat_url: Option<String>,
     pub has_dat: bool,
+    /// RetroArch core the system launches with, if it uses RetroArch.
+    pub emulator_core: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -84,6 +86,77 @@ pub struct RomDetailsDto {
     pub headerless_crc32: Option<String>,
     /// Bytes past the ROM data at the end of the file, also skipped for matching.
     pub trailer_size: Option<i64>,
+    pub emulator_core: Option<String>,
+}
+
+/// One way to run a system, as offered in the emulator dropdown.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct EmulatorOptionDto {
+    /// "retroarch" or "standalone".
+    pub kind: String,
+    /// RetroArch core id, for kind "retroarch".
+    pub core: Option<String>,
+    /// Known emulator id, for kind "standalone".
+    pub emulator_id: Option<String>,
+    pub label: String,
+    /// False for a RetroArch core that isn't downloaded yet.
+    pub installed: bool,
+    pub recommended: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SystemEmulatorDto {
+    pub system_id: i64,
+    pub name: String,
+    /// "none", "retroarch", "standalone" or "custom".
+    pub kind: String,
+    pub core: Option<String>,
+    pub emulator_id: Option<String>,
+    pub emulator_path: Option<String>,
+    pub emulator_args: Option<String>,
+    pub options: Vec<EmulatorOptionDto>,
+    /// Why the current setup won't launch, if it won't.
+    pub problem: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DetectedEmulatorDto {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct EmulatorSetupDto {
+    pub retroarch_path: Option<String>,
+    /// The path was found on this PC rather than saved in settings.
+    pub retroarch_detected: bool,
+    pub retroarch_cores_dir: Option<String>,
+    pub installed_core_count: usize,
+    pub standalone: Vec<DetectedEmulatorDto>,
+    pub systems: Vec<SystemEmulatorDto>,
+}
+
+/// What set_system_emulator_choice should do.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum EmulatorChoice {
+    None,
+    Retroarch { core: String },
+    Standalone { emulator_id: String, path: String },
+    Custom { path: Option<String>, args: Option<String> },
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct AutoConfigureSummary {
+    /// "System: choice" for each system set up.
+    pub configured: Vec<String>,
+    /// Systems left alone because they already launch.
+    pub kept: Vec<String>,
+    /// "System: reason" for systems nothing was found for.
+    pub not_found: Vec<String>,
+    /// Cores chosen that RetroArch still needs to download.
+    pub cores_to_install: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]

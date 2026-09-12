@@ -252,7 +252,9 @@ ${rom.file_path}
 
         <dt>Emulator</dt>
         <dd>
-          {details.emulator_path ? (
+          {details.emulator_core ? (
+            `RetroArch · ${details.emulator_core} core`
+          ) : details.emulator_path ? (
             <>
               {details.emulator_path}
               {details.emulator_args ? ` ${details.emulator_args}` : ""}
@@ -290,10 +292,10 @@ ${rom.file_path}
       <div className="details-actions">
         <button
           onClick={() => launch(details)}
-          disabled={launching || !details.emulator_path}
+          disabled={launching || !(details.emulator_path || details.emulator_core)}
           className="primary"
           title={
-            details.emulator_path
+            details.emulator_path || details.emulator_core
               ? undefined
               : `No emulator is set for ${details.system_name ?? "this system"}. Choose one in Settings → Emulators.`
           }

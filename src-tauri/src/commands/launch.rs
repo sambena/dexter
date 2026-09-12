@@ -1,7 +1,8 @@
 use crate::commands::maintenance::on_disk_path;
 use crate::db::repo;
+use crate::emulators::retroarch::RetroArch;
 use crate::state::AppState;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::Manager;
 
@@ -56,6 +57,24 @@ fn build_args(template: Option<&str>, rom_path: &str) -> Vec<String> {
     args
 }
 
+/// The path to hand an emulator. An extracted Wii U title is a folder, and
+/// Cemu launches it from the single executable in its code folder.
+fn launchable_path(rom: &Path) -> String {
+    if rom.is_dir() {
+        let rpx: Vec<PathBuf> = std::fs::read_dir(rom.join("code"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("rpx")))
+            .collect();
+        if let [only] = rpx.as_slice() {
+            return only.to_string_lossy().to_string();
+        }
+    }
+    rom.to_string_lossy().to_string()
+}
+
 /// Starts the system's configured emulator on a ROM and returns once the
 /// process is running, without waiting for it to exit.
 #[tauri::command]
@@ -68,20 +87,6 @@ pub async fn launch_rom(rom_id: i64, app: tauri::AppHandle) -> Result<(), String
         }
         .ok_or_else(|| "This ROM is no longer in the library.".to_string())?;
 
-        let emulator = details
-            .emulator_path
-            .filter(|p| !p.trim().is_empty())
-            .ok_or_else(|| {
-                format!(
-                    "No emulator is set for {}. Choose one in Settings → Emulators.",
-                    details.system_name.as_deref().unwrap_or("this ROM's system")
-                )
-            })?;
-        let emulator_path = Path::new(&emulator);
-        if !emulator_path.is_file() {
-            return Err(format!("The emulator wasn't found at {}.", emulator));
-        }
-
         // A zipped ROM is launched by handing over the archive itself, which
         // RetroArch and most standalone emulators open directly.
         let rom_path = on_disk_path(&details.file_path, details.archive_member.as_deref());
@@ -91,9 +96,47 @@ pub async fn launch_rom(rom_id: i64, app: tauri::AppHandle) -> Result<(), String
                 rom_path
             ));
         }
+        let rom_path = launchable_path(Path::new(&rom_path));
+
+        let (emulator, args) = match details.emulator_core.as_deref().filter(|c| !c.is_empty()) {
+            Some(core) => {
+                let saved = {
+                    let conn = state.db.lock().map_err(|e| e.to_string())?;
+                    repo::get_setting(&conn, "retroarch_path").map_err(|e| e.to_string())?
+                };
+                let exe = saved
+                    .filter(|p| Path::new(p).is_file())
+                    .map(PathBuf::from)
+                    .or_else(|| crate::emulators::detect::detect().retroarch)
+                    .ok_or("RetroArch wasn't found. Set where it's installed in Settings → Emulators.")?;
+                let retroarch = RetroArch::at(&exe);
+                let core_path = retroarch.core_path(core);
+                if !core_path.is_file() {
+                    return Err(format!(
+                        "The {} core isn't installed in RetroArch yet. In RetroArch: Main Menu → Online Updater → Core Downloader.",
+                        core
+                    ));
+                }
+                (exe.to_string_lossy().to_string(), vec!["-L".to_string(), core_path.to_string_lossy().to_string(), rom_path])
+            }
+            None => {
+                let emulator = details.emulator_path.filter(|p| !p.trim().is_empty()).ok_or_else(|| {
+                    format!(
+                        "No emulator is set for {}. Choose one in Settings → Emulators.",
+                        details.system_name.as_deref().unwrap_or("this ROM's system")
+                    )
+                })?;
+                let args = build_args(details.emulator_args.as_deref(), &rom_path);
+                (emulator, args)
+            }
+        };
+        let emulator_path = Path::new(&emulator);
+        if !emulator_path.is_file() {
+            return Err(format!("The emulator wasn't found at {}.", emulator));
+        }
 
         let mut cmd = Command::new(emulator_path);
-        cmd.args(build_args(details.emulator_args.as_deref(), &rom_path));
+        cmd.args(args);
         // Arguments like RetroArch's `-L cores\snes9x_libretro.dll` are
         // relative to the emulator's own folder, not Dexter's.
         if let Some(dir) = emulator_path.parent() {

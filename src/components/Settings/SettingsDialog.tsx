@@ -1,6 +1,6 @@
 import { FolderPicker } from "./FolderPicker";
 import { DatImportPanel } from "./DatImportPanel";
-import { EmulatorMappingTable } from "./EmulatorMappingTable";
+import { EmulatorSettings } from "./EmulatorSettings";
 
 export function SettingsDialog({ onClose }: { onClose: () => void }) {
   return (
@@ -13,7 +13,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
         <div className="modal-body">
           <FolderPicker />
           <DatImportPanel />
-          <EmulatorMappingTable />
+          <EmulatorSettings />
         </div>
       </div>
     </div>

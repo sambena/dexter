@@ -41,7 +41,7 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> rusqlite::Resul
 pub fn list_systems(conn: &Connection) -> rusqlite::Result<Vec<SystemDto>> {
     let mut stmt = conn.prepare(
         "SELECT s.id, s.name, s.folder_name, s.emulator_path, s.emulator_args, s.dat_url,
-                EXISTS(SELECT 1 FROM dat_sources d WHERE d.system_id = s.id)
+                EXISTS(SELECT 1 FROM dat_sources d WHERE d.system_id = s.id), s.emulator_core
          FROM systems s
          ORDER BY s.name",
     )?;
@@ -54,9 +54,31 @@ pub fn list_systems(conn: &Connection) -> rusqlite::Result<Vec<SystemDto>> {
             emulator_args: r.get(4)?,
             dat_url: r.get(5)?,
             has_dat: r.get(6)?,
+            emulator_core: r.get(7)?,
         })
     })?;
     rows.collect()
+}
+
+/// DAT names per system id, for working out which platform a system is.
+pub fn dat_names_by_system(conn: &Connection) -> rusqlite::Result<std::collections::HashMap<i64, Vec<String>>> {
+    let mut stmt = conn.prepare("SELECT system_id, dat_name FROM dat_sources WHERE dat_name IS NOT NULL")?;
+    let mut map: std::collections::HashMap<i64, Vec<String>> = std::collections::HashMap::new();
+    for row in stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))? {
+        let (system_id, name) = row?;
+        map.entry(system_id).or_default().push(name);
+    }
+    Ok(map)
+}
+
+/// Launches the system through the shared RetroArch install with this core,
+/// replacing any emulator path/args it had.
+pub fn set_system_core(conn: &Connection, system_id: i64, core: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE systems SET emulator_core = ?1, emulator_path = NULL, emulator_args = NULL WHERE id = ?2",
+        params![core, system_id],
+    )?;
+    Ok(())
 }
 
 pub fn get_or_create_system_by_folder(conn: &Connection, folder_name: &str) -> rusqlite::Result<i64> {
@@ -84,7 +106,7 @@ pub fn set_system_emulator(
     emulator_args: Option<&str>,
 ) -> rusqlite::Result<()> {
     conn.execute(
-        "UPDATE systems SET emulator_path = ?1, emulator_args = ?2 WHERE id = ?3",
+        "UPDATE systems SET emulator_path = ?1, emulator_args = ?2, emulator_core = NULL WHERE id = ?3",
         params![emulator_path, emulator_args, system_id],
     )?;
     Ok(())
@@ -564,7 +586,7 @@ pub fn get_rom_details(conn: &Connection, rom_id: i64) -> rusqlite::Result<Optio
         "SELECT r.id, r.file_name, r.file_path, r.archive_member, r.system_id, s.name,
                 dg.year, dg.region, dg.name, r.match_status,
                 r.crc32, r.md5, r.sha1, s.emulator_path, s.emulator_args,
-                r.header_size, r.headerless_crc32, r.trailer_size
+                r.header_size, r.headerless_crc32, r.trailer_size, s.emulator_core
          FROM roms r
          LEFT JOIN systems s ON s.id = r.system_id
          LEFT JOIN dat_roms dr ON dr.id = r.dat_rom_id
@@ -605,6 +627,7 @@ pub fn get_rom_details(conn: &Connection, rom_id: i64) -> rusqlite::Result<Optio
                 header_size: r.get(15)?,
                 headerless_crc32: r.get(16)?,
                 trailer_size: r.get(17)?,
+                emulator_core: r.get(18)?,
             })
         },
     )

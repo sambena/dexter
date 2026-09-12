@@ -14,6 +14,7 @@ import type {
   SystemDto,
 } from "../types/rom";
 import type { Settings } from "../types/settings";
+import type { AutoConfigureSummary, EmulatorChoice, EmulatorSetupDto } from "../types/emulators";
 
 export const api = {
   getSettings: () => invoke<Settings>("get_settings"),
@@ -24,6 +25,11 @@ export const api = {
   listSystems: () => invoke<SystemDto[]>("list_systems"),
   setSystemEmulator: (systemId: number, emulatorPath: string | null, emulatorArgs: string | null) =>
     invoke<void>("set_system_emulator", { systemId, emulatorPath, emulatorArgs }),
+  getEmulatorSetup: () => invoke<EmulatorSetupDto>("get_emulator_setup"),
+  setRetroarchPath: (path: string | null) => invoke<void>("set_retroarch_path", { path }),
+  setSystemEmulatorChoice: (systemId: number, choice: EmulatorChoice) =>
+    invoke<void>("set_system_emulator_choice", { systemId, choice }),
+  autoConfigureEmulators: () => invoke<AutoConfigureSummary>("auto_configure_emulators"),
 
   pickDatFile: () => invoke<string | null>("pick_dat_file"),
   importDatFile: (systemId: number, filePath: string) =>

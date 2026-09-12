@@ -6,6 +6,7 @@ export interface SystemDto {
   emulator_args: string | null;
   dat_url: string | null;
   has_dat: boolean;
+  emulator_core: string | null;
 }
 
 export interface DatSourceDto {
@@ -46,6 +47,7 @@ export interface RomDetailsDto {
   header_size: number | null;
   headerless_crc32: string | null;
   trailer_size: number | null;
+  emulator_core: string | null;
 }
 
 export interface RomFilter {

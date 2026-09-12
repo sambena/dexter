@@ -381,6 +381,52 @@ body {
   vertical-align: top;
 }
 
+.retroarch-box {
+  margin: 0.5rem 0 0.75rem;
+}
+
+.retroarch-label {
+  align-self: center;
+  min-width: 5.5rem;
+}
+
+.emulator-table td {
+  vertical-align: middle;
+}
+
+.emulator-system {
+  white-space: nowrap;
+}
+
+.emulator-select {
+  width: 100%;
+  max-width: 26rem;
+}
+
+.emulator-custom {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
+  max-width: 26rem;
+}
+
+.emulator-status {
+  font-size: 0.8rem;
+}
+
+.emulator-ok {
+  color: var(--matched);
+}
+
+.emulator-problem {
+  color: var(--unmatched);
+}
+
+.emulator-message {
+  margin-top: 0.4rem;
+}
+
 .dat-source-list {
   list-style: none;
   margin: 0;

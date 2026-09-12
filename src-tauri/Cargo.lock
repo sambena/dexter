@@ -3357,6 +3357,7 @@ dependencies = [
  "tiny_http",
  "trash",
  "walkdir",
+ "windows-sys 0.59.0",
  "zip",
 ]
 

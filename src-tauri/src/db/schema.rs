@@ -166,8 +166,18 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     if version < 7 {
         migrate_v7_unverifiable(conn)?;
     }
+    if version < 8 {
+        conn.execute_batch(&format!("BEGIN; {} PRAGMA user_version = 8; COMMIT;", SCHEMA_V8))?;
+    }
     Ok(())
 }
+
+const SCHEMA_V8: &str = r#"
+-- A RetroArch core for the system, e.g. "mgba". When set, the system launches
+-- through the one RetroArch install in settings (key retroarch_path) instead
+-- of its own emulator_path/emulator_args, so RetroArch is configured once.
+ALTER TABLE systems ADD COLUMN emulator_core TEXT;
+"#;
 
 /// Moves ROMs that hashing can never verify out of "unmatched"/"pending" into
 /// the new "unverifiable" status. Done in Rust rather than SQL so the list of
@@ -236,7 +246,7 @@ mod tests {
         assert_eq!(status("Contra.nes"), "matched");
         assert_eq!(status("Metroid.gba"), "unmatched");
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(version, 7);
+        assert_eq!(version, 8);
     }
 
     #[test]

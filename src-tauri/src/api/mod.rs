@@ -51,6 +51,15 @@ pub const COMMANDS: &[CommandInfo] = &[
         "Set a system's emulator. An omitted value is cleared, as in the window.",
         None,
     ),
+    read("get_emulator_setup", "", "Detected RetroArch/emulators and each system's emulator options."),
+    write("set_retroarch_path", "path?", "Set (or clear) where RetroArch is installed.", None),
+    write(
+        "set_system_emulator_choice",
+        "system_id, choice.kind (none|retroarch|standalone|custom), choice.core?, choice.emulator_id?, choice.path?, choice.args?",
+        "Choose how a system launches.",
+        None,
+    ),
+    write("auto_configure_emulators", "", "Set up every system without a working emulator.", Some(Job { label: "Setting up emulators", cancellable: false })),
     write("set_system_dat_url", "system_id, dat_url?", "Set or clear a system's direct DAT download URL.", None),
     read("list_dat_sources", "", "Imported DATs."),
     read("has_known_dat_source", "folder_name", "Whether a DAT can be fetched automatically for a system folder."),
@@ -139,6 +148,12 @@ async fn run(app: &AppHandle, name: &str, a: &Map<String, Value>) -> Result<Valu
             arg(a, "emulator_args")?,
             state,
         )),
+        "get_emulator_setup" => to_value(emulators::get_emulator_setup(handle).await),
+        "set_retroarch_path" => to_value(emulators::set_retroarch_path(arg(a, "path")?, handle)),
+        "set_system_emulator_choice" => {
+            to_value(emulators::set_system_emulator_choice(arg(a, "system_id")?, arg(a, "choice")?, handle).await)
+        }
+        "auto_configure_emulators" => to_value(emulators::auto_configure_emulators(handle).await),
         "set_system_dat_url" => to_value(dat::set_system_dat_url(arg(a, "system_id")?, arg(a, "dat_url")?, state)),
         "list_dat_sources" => to_value(dat::list_dat_sources(state)),
         "has_known_dat_source" => Ok(json!(dat::has_known_dat_source(arg(a, "folder_name")?))),
