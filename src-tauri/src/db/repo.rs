@@ -765,7 +765,6 @@ pub fn list_duplicate_groups(conn: &Connection) -> rusqlite::Result<Vec<Duplicat
 pub struct RenameCandidate {
     pub rom_id: i64,
     pub file_path: String,
-    pub file_name: String,
     pub archive_member: Option<String>,
     pub dat_rom_name: String,
     pub dat_game_name: String,
@@ -775,7 +774,7 @@ pub struct RenameCandidate {
 /// rename plan. Unmatched ROMs have no authoritative name so are excluded.
 pub fn list_rename_candidates(conn: &Connection) -> rusqlite::Result<Vec<RenameCandidate>> {
     let mut stmt = conn.prepare(
-        "SELECT r.id, r.file_path, r.file_name, r.archive_member, dr.name, dg.name
+        "SELECT r.id, r.file_path, r.archive_member, dr.name, dg.name
          FROM roms r
          JOIN dat_roms dr ON dr.id = r.dat_rom_id
          JOIN dat_games dg ON dg.id = dr.dat_game_id
@@ -786,10 +785,9 @@ pub fn list_rename_candidates(conn: &Connection) -> rusqlite::Result<Vec<RenameC
         Ok(RenameCandidate {
             rom_id: r.get(0)?,
             file_path: r.get(1)?,
-            file_name: r.get(2)?,
-            archive_member: r.get(3)?,
-            dat_rom_name: r.get(4)?,
-            dat_game_name: r.get(5)?,
+            archive_member: r.get(2)?,
+            dat_rom_name: r.get(3)?,
+            dat_game_name: r.get(4)?,
         })
     })?;
     rows.collect()

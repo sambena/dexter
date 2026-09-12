@@ -121,6 +121,7 @@ export interface RenamePlanEntryDto {
   current_name: string;
   new_name: string;
   target_path: string;
+  also_renames: string[];
   blocked_reason: string | null;
 }
 

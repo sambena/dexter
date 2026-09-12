@@ -147,6 +147,8 @@ pub struct RenamePlanEntryDto {
     /// Absolute path of the file that would actually be renamed. For a ROM
     /// inside an archive this is the archive, not the member.
     pub target_path: String,
+    /// Save files renamed along with it, by current name.
+    pub also_renames: Vec<String>,
     /// Set when the entry can't be renamed; the UI shows it and disables it.
     pub blocked_reason: Option<String>,
 }

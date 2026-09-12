@@ -70,7 +70,9 @@ export function RenamePanel() {
       <h3>Rename to DAT names</h3>
       <p className="hint">
         Renames matched ROMs to the canonical name from the DAT. Only matched files appear — an
-        unmatched file has no authoritative name to rename to. Nothing is touched until you apply.
+        unmatched file has no authoritative name to rename to. Save files named after a ROM are renamed
+        with it, and files a cue sheet or playlist loads by name are left alone. Nothing is touched until you
+        apply.
       </p>
 
       {plan === null && <p className="hint">Building plan…</p>}
@@ -108,7 +110,12 @@ export function RenamePanel() {
                     {e.blocked_reason ? (
                       <span className="hint rename-reason">{e.blocked_reason}</span>
                     ) : (
-                      e.new_name
+                      <>
+                        {e.new_name}
+                        {e.also_renames.length > 0 && (
+                          <span className="hint rename-reason"> · also renames {e.also_renames.join(", ")}</span>
+                        )}
+                      </>
                     )}
                   </td>
                 </tr>
