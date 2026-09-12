@@ -4,9 +4,17 @@ export interface SystemDto {
   folder_name: string;
   emulator_path: string | null;
   emulator_args: string | null;
+  dat_url: string | null;
+  has_dat: boolean;
+}
+
+export interface DatSourceDto {
+  id: number;
+  system_id: number;
+  file_name: string;
   dat_name: string | null;
   dat_version: string | null;
-  dat_imported_at: string | null;
+  imported_at: string;
 }
 
 export interface RomListItemDto {
@@ -28,6 +36,7 @@ export interface RomDetailsDto {
   year: string | null;
   region: string | null;
   display_name: string;
+  metadata_guessed: boolean;
   match_status: string;
   crc32: string | null;
   md5: string | null;
@@ -59,9 +68,31 @@ export interface ScanProgress {
   current_file: string;
 }
 
+export interface ArtFetchSummary {
+  attempted: number;
+  downloaded: number;
+  not_found: number;
+  errors: string[];
+}
+
 export interface DatImportSummary {
   games_imported: number;
   roms_imported: number;
+  newly_matched: number;
   dat_name: string | null;
   dat_version: string | null;
+}
+
+export interface DatFolderImportedEntry {
+  file_name: string;
+  system_name: string;
+  games_imported: number;
+  roms_imported: number;
+  newly_matched: number;
+}
+
+export interface DatFolderImportSummary {
+  imported: DatFolderImportedEntry[];
+  unmatched: string[];
+  errors: string[];
 }

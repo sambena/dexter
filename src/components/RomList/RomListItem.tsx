@@ -12,7 +12,9 @@ export function RomListItem({
   return (
     <li className={`rom-list-item${selected ? " selected" : ""}`} onClick={onSelect}>
       <span className={`match-dot ${rom.match_status}`} title={rom.match_status} />
-      <span className="rom-name">{rom.display_name}</span>
+      <span className="rom-name" title={rom.display_name !== rom.file_name ? `${rom.display_name} (${rom.file_name})` : rom.file_name}>
+        {rom.display_name}
+      </span>
       {rom.system_name && <span className="system-badge">{rom.system_name}</span>}
     </li>
   );

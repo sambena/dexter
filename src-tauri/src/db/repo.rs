@@ -37,10 +37,9 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> rusqlite::Resul
 
 pub fn list_systems(conn: &Connection) -> rusqlite::Result<Vec<SystemDto>> {
     let mut stmt = conn.prepare(
-        "SELECT s.id, s.name, s.folder_name, s.emulator_path, s.emulator_args,
-                d.dat_name, d.dat_version, d.imported_at
+        "SELECT s.id, s.name, s.folder_name, s.emulator_path, s.emulator_args, s.dat_url,
+                EXISTS(SELECT 1 FROM dat_sources d WHERE d.system_id = s.id)
          FROM systems s
-         LEFT JOIN dat_sources d ON d.system_id = s.id
          ORDER BY s.name",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -50,9 +49,8 @@ pub fn list_systems(conn: &Connection) -> rusqlite::Result<Vec<SystemDto>> {
             folder_name: r.get(2)?,
             emulator_path: r.get(3)?,
             emulator_args: r.get(4)?,
-            dat_name: r.get(5)?,
-            dat_version: r.get(6)?,
-            dat_imported_at: r.get(7)?,
+            dat_url: r.get(5)?,
+            has_dat: r.get(6)?,
         })
     })?;
     rows.collect()
@@ -98,6 +96,33 @@ pub fn get_system_folder_name(conn: &Connection, system_id: i64) -> rusqlite::Re
     .optional()
 }
 
+pub struct SystemDatSource {
+    pub folder_name: String,
+    pub dat_url: Option<String>,
+}
+
+pub fn get_system_dat_source(conn: &Connection, system_id: i64) -> rusqlite::Result<Option<SystemDatSource>> {
+    conn.query_row(
+        "SELECT folder_name, dat_url FROM systems WHERE id = ?1",
+        params![system_id],
+        |r| {
+            Ok(SystemDatSource {
+                folder_name: r.get(0)?,
+                dat_url: r.get(1)?,
+            })
+        },
+    )
+    .optional()
+}
+
+pub fn set_system_dat_url(conn: &Connection, system_id: i64, dat_url: Option<&str>) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE systems SET dat_url = ?1 WHERE id = ?2",
+        params![dat_url, system_id],
+    )?;
+    Ok(())
+}
+
 // ---------- dat import ----------
 
 pub struct DatGameImport {
@@ -116,7 +141,15 @@ pub struct DatRomImport {
     pub sha1: Option<String>,
 }
 
-pub fn replace_dat_source(
+/// Adds a DAT as another source for a system rather than replacing whatever's
+/// already there — some systems (e.g. N64's BigEndian/ByteSwapped/LittleEndian
+/// split) need multiple DATs imported to get good match coverage. Use
+/// remove_dat_source to take one back out.
+///
+/// Re-importing the *same* DAT still replaces its previous copy: identity is
+/// the DAT's internal name when it has one (so a re-download with a bumped
+/// version supersedes the old one), else the file name.
+pub fn add_dat_source(
     conn: &mut Connection,
     system_id: i64,
     file_name: &str,
@@ -125,12 +158,17 @@ pub fn replace_dat_source(
     games: &[DatGameImport],
 ) -> rusqlite::Result<(i64, i64)> {
     let tx = conn.transaction()?;
-    // Removing the old dat_source cascades to dat_games/dat_roms (and NULLs matched roms.dat_rom_id)
-    tx.execute(
-        "DELETE FROM dat_sources WHERE system_id = ?1",
-        params![system_id],
-    )?;
     let now = chrono::Utc::now().to_rfc3339();
+    match dat_name {
+        Some(name) => tx.execute(
+            "DELETE FROM dat_sources WHERE system_id = ?1 AND dat_name = ?2",
+            params![system_id, name],
+        )?,
+        None => tx.execute(
+            "DELETE FROM dat_sources WHERE system_id = ?1 AND dat_name IS NULL AND file_name = ?2",
+            params![system_id, file_name],
+        )?,
+    };
     tx.execute(
         "INSERT INTO dat_sources (system_id, file_name, dat_name, dat_version, imported_at)
          VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -164,6 +202,99 @@ pub fn replace_dat_source(
     }
     tx.commit()?;
     Ok((games_imported, roms_imported))
+}
+
+pub fn list_dat_sources(conn: &Connection) -> rusqlite::Result<Vec<crate::models::DatSourceDto>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, system_id, file_name, dat_name, dat_version, imported_at
+         FROM dat_sources
+         ORDER BY system_id, imported_at",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(crate::models::DatSourceDto {
+            id: r.get(0)?,
+            system_id: r.get(1)?,
+            file_name: r.get(2)?,
+            dat_name: r.get(3)?,
+            dat_version: r.get(4)?,
+            imported_at: r.get(5)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// Removing a dat_source cascades to its dat_games/dat_roms and NULLs
+/// dat_rom_id on any roms that pointed into it — but their match_status
+/// wouldn't otherwise reflect that, so it's fixed up here too.
+pub fn remove_dat_source(conn: &mut Connection, dat_source_id: i64) -> rusqlite::Result<()> {
+    let system_id: Option<i64> = conn
+        .query_row(
+            "SELECT system_id FROM dat_sources WHERE id = ?1",
+            params![dat_source_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    conn.execute("DELETE FROM dat_sources WHERE id = ?1", params![dat_source_id])?;
+    if let Some(system_id) = system_id {
+        rematch_system(conn, system_id)?;
+    }
+    Ok(())
+}
+
+/// Re-runs matching for a system using hashes already stored in the DB, with
+/// no file I/O. Importing or removing a DAT changes what a ROM *would* match,
+/// but Hash & Match only revisits 'pending'/'error' rows — so without this,
+/// adding a DAT would appear to do nothing to an already-scanned library.
+/// Returns (newly_matched, now_unmatched).
+pub fn rematch_system(conn: &mut Connection, system_id: i64) -> rusqlite::Result<(i64, i64)> {
+    struct Hashed {
+        id: i64,
+        crc32: String,
+        sha1: String,
+        md5: String,
+        was_matched: bool,
+    }
+
+    let hashed: Vec<Hashed> = {
+        let mut stmt = conn.prepare(
+            "SELECT id, crc32, sha1, md5, dat_rom_id FROM roms
+             WHERE system_id = ?1 AND crc32 IS NOT NULL
+               AND match_status IN ('matched', 'unmatched')",
+        )?;
+        let rows = stmt.query_map(params![system_id], |r| {
+            Ok(Hashed {
+                id: r.get(0)?,
+                crc32: r.get(1)?,
+                sha1: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                md5: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                was_matched: r.get::<_, Option<i64>>(4)?.is_some(),
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+
+    let mut newly_matched = 0i64;
+    let mut now_unmatched = 0i64;
+    let tx = conn.transaction()?;
+    for rom in &hashed {
+        let dat_rom_id = find_dat_rom_match(&tx, system_id, &rom.crc32, &rom.sha1, &rom.md5)?;
+        let is_matched = dat_rom_id.is_some();
+        if is_matched && !rom.was_matched {
+            newly_matched += 1;
+        } else if !is_matched && rom.was_matched {
+            now_unmatched += 1;
+        }
+        tx.execute(
+            "UPDATE roms SET dat_rom_id = ?1, match_status = ?2 WHERE id = ?3",
+            params![
+                dat_rom_id,
+                if is_matched { "matched" } else { "unmatched" },
+                rom.id
+            ],
+        )?;
+    }
+    tx.commit()?;
+    Ok((newly_matched, now_unmatched))
 }
 
 // ---------- scanning ----------
@@ -285,9 +416,11 @@ pub struct PendingRom {
     pub archive_member: Option<String>,
 }
 
+/// Rows still awaiting a hash, including ones from a previous hashing pass that
+/// failed (e.g. a transient network read error) — those are automatically retried.
 pub fn list_pending_roms(conn: &Connection) -> rusqlite::Result<Vec<PendingRom>> {
     let mut stmt = conn.prepare(
-        "SELECT id, system_id, file_path, archive_member FROM roms WHERE match_status = 'pending'",
+        "SELECT id, system_id, file_path, archive_member FROM roms WHERE match_status IN ('pending', 'error')",
     )?;
     let rows = stmt.query_map([], |r| {
         Ok(PendingRom {
@@ -330,8 +463,7 @@ pub fn mark_rom_hash_error(conn: &Connection, rom_id: i64) -> rusqlite::Result<(
 
 pub fn list_roms(conn: &Connection, filter: &RomFilter) -> rusqlite::Result<Vec<RomListItemDto>> {
     let mut sql = String::from(
-        "SELECT r.id, r.file_name, r.system_id, s.name,
-                COALESCE(dg.name, r.file_name), r.match_status
+        "SELECT r.id, r.file_name, r.system_id, s.name, dg.name, r.match_status
          FROM roms r
          LEFT JOIN systems s ON s.id = r.system_id
          LEFT JOIN dat_roms dr ON dr.id = r.dat_rom_id
@@ -366,12 +498,16 @@ pub fn list_roms(conn: &Connection, filter: &RomFilter) -> rusqlite::Result<Vec<
     let mut stmt = conn.prepare(&sql)?;
     let param_refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
     let rows = stmt.query_map(param_refs.as_slice(), |r| {
+        let file_name: String = r.get(1)?;
+        let dat_name: Option<String> = r.get(4)?;
+        let display_name = dat_name
+            .unwrap_or_else(|| crate::dat::filename::parse_filename_metadata(&file_name).title);
         Ok(RomListItemDto {
             id: r.get(0)?,
-            file_name: r.get(1)?,
+            file_name,
             system_id: r.get(2)?,
             system_name: r.get(3)?,
-            display_name: r.get(4)?,
+            display_name,
             match_status: r.get(5)?,
         })
     })?;
@@ -381,7 +517,7 @@ pub fn list_roms(conn: &Connection, filter: &RomFilter) -> rusqlite::Result<Vec<
 pub fn get_rom_details(conn: &Connection, rom_id: i64) -> rusqlite::Result<Option<RomDetailsDto>> {
     conn.query_row(
         "SELECT r.id, r.file_name, r.file_path, r.archive_member, r.system_id, s.name,
-                dg.year, dg.region, COALESCE(dg.name, r.file_name), r.match_status,
+                dg.year, dg.region, dg.name, r.match_status,
                 r.crc32, r.md5, r.sha1, s.emulator_path, s.emulator_args
          FROM roms r
          LEFT JOIN systems s ON s.id = r.system_id
@@ -390,16 +526,30 @@ pub fn get_rom_details(conn: &Connection, rom_id: i64) -> rusqlite::Result<Optio
          WHERE r.id = ?1",
         params![rom_id],
         |r| {
+            let file_name: String = r.get(1)?;
+            let dat_year: Option<String> = r.get(6)?;
+            let dat_region: Option<String> = r.get(7)?;
+            let dat_name: Option<String> = r.get(8)?;
+
+            let (display_name, year, region, metadata_guessed) = match dat_name {
+                Some(name) => (name, dat_year, dat_region, false),
+                None => {
+                    let guessed = crate::dat::filename::parse_filename_metadata(&file_name);
+                    (guessed.title, guessed.year, guessed.region, true)
+                }
+            };
+
             Ok(RomDetailsDto {
                 id: r.get(0)?,
-                file_name: r.get(1)?,
+                file_name,
                 file_path: r.get(2)?,
                 archive_member: r.get(3)?,
                 system_id: r.get(4)?,
                 system_name: r.get(5)?,
-                year: r.get(6)?,
-                region: r.get(7)?,
-                display_name: r.get(8)?,
+                year,
+                region,
+                display_name,
+                metadata_guessed,
                 match_status: r.get(9)?,
                 crc32: r.get(10)?,
                 md5: r.get(11)?,
@@ -410,4 +560,104 @@ pub fn get_rom_details(conn: &Connection, rom_id: i64) -> rusqlite::Result<Optio
         },
     )
     .optional()
+}
+
+// ---------- box art ----------
+
+pub struct RomArtContext {
+    pub dat_game_id: Option<i64>,
+    pub dat_game_name: Option<String>,
+    pub system_folder_name: Option<String>,
+}
+
+pub fn get_rom_art_context(conn: &Connection, rom_id: i64) -> rusqlite::Result<Option<RomArtContext>> {
+    conn.query_row(
+        "SELECT dg.id, dg.name, s.folder_name
+         FROM roms r
+         LEFT JOIN dat_roms dr ON dr.id = r.dat_rom_id
+         LEFT JOIN dat_games dg ON dg.id = dr.dat_game_id
+         LEFT JOIN systems s ON s.id = r.system_id
+         WHERE r.id = ?1",
+        params![rom_id],
+        |row| {
+            Ok(RomArtContext {
+                dat_game_id: row.get(0)?,
+                dat_game_name: row.get(1)?,
+                system_folder_name: row.get(2)?,
+            })
+        },
+    )
+    .optional()
+}
+
+/// Rom-level box art (manual override) takes priority; otherwise falls back to
+/// whatever's stored for the matched DAT game, if any.
+pub fn get_box_art_path(conn: &Connection, rom_id: i64) -> rusqlite::Result<Option<String>> {
+    if let Some(path) = conn
+        .query_row(
+            "SELECT file_path FROM box_art WHERE rom_id = ?1",
+            params![rom_id],
+            |r| r.get(0),
+        )
+        .optional()?
+    {
+        return Ok(Some(path));
+    }
+    conn.query_row(
+        "SELECT ba.file_path
+         FROM box_art ba
+         JOIN dat_roms dr ON dr.dat_game_id = ba.dat_game_id
+         JOIN roms r ON r.dat_rom_id = dr.id
+         WHERE r.id = ?1",
+        params![rom_id],
+        |r| r.get(0),
+    )
+    .optional()
+}
+
+pub fn set_rom_box_art(conn: &Connection, rom_id: i64, file_path: &str, source: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO box_art (rom_id, file_path, source) VALUES (?1, ?2, ?3)
+         ON CONFLICT(rom_id) DO UPDATE SET file_path = excluded.file_path, source = excluded.source",
+        params![rom_id, file_path, source],
+    )?;
+    Ok(())
+}
+
+pub fn set_game_box_art(conn: &Connection, dat_game_id: i64, file_path: &str, source: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO box_art (dat_game_id, file_path, source) VALUES (?1, ?2, ?3)
+         ON CONFLICT(dat_game_id) DO UPDATE SET file_path = excluded.file_path, source = excluded.source",
+        params![dat_game_id, file_path, source],
+    )?;
+    Ok(())
+}
+
+pub struct GameArtTarget {
+    pub dat_game_id: i64,
+    pub game_name: String,
+    pub folder_name: String,
+}
+
+/// Every matched DAT game (that at least one scanned ROM actually resolves to)
+/// which doesn't have box art cached yet — the working set for a bulk art download.
+pub fn list_matched_games_missing_art(conn: &Connection) -> rusqlite::Result<Vec<GameArtTarget>> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT dg.id, dg.name, s.folder_name
+         FROM dat_games dg
+         JOIN dat_sources ds ON ds.id = dg.dat_source_id
+         JOIN systems s ON s.id = ds.system_id
+         WHERE EXISTS (
+             SELECT 1 FROM dat_roms dr JOIN roms r ON r.dat_rom_id = dr.id WHERE dr.dat_game_id = dg.id
+         )
+         AND NOT EXISTS (SELECT 1 FROM box_art ba WHERE ba.dat_game_id = dg.id)",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(GameArtTarget {
+            dat_game_id: r.get(0)?,
+            game_name: r.get(1)?,
+            folder_name: r.get(2)?,
+        })
+    })?;
+    rows.collect()
 }

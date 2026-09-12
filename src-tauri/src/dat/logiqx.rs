@@ -22,8 +22,10 @@ struct Header {
 struct Game {
     #[serde(rename = "@name")]
     name: String,
-    #[serde(default)]
-    category: Option<String>,
+    // Some current No-Intro DATs emit more than one <category> per game;
+    // collect them all rather than erroring on a scalar field.
+    #[serde(rename = "category", default)]
+    category: Vec<String>,
     #[serde(rename = "rom", default)]
     roms: Vec<RomEntry>,
 }
@@ -32,14 +34,21 @@ struct Game {
 struct RomEntry {
     #[serde(rename = "@name")]
     name: String,
+    // Some DATs (e.g. Wii U sets) emit size="" for entries with no known size —
+    // deserialize as a string first so an empty attribute doesn't hard-fail
+    // parsing of the whole file, then parse it leniently below.
     #[serde(rename = "@size", default)]
-    size: Option<i64>,
+    size: Option<String>,
     #[serde(rename = "@crc", default)]
     crc: Option<String>,
     #[serde(rename = "@md5", default)]
     md5: Option<String>,
     #[serde(rename = "@sha1", default)]
     sha1: Option<String>,
+}
+
+fn non_empty(s: Option<String>) -> Option<String> {
+    s.filter(|s| !s.is_empty())
 }
 
 pub struct ParsedDat {
@@ -75,9 +84,10 @@ pub fn parse_dat(xml: &str) -> anyhow::Result<ParsedDat> {
         .into_iter()
         .map(|g| {
             let (year, region) = extract_year_region(&g.name);
+            let category = (!g.category.is_empty()).then(|| g.category.join(", "));
             DatGameImport {
                 name: g.name,
-                category: g.category,
+                category,
                 year,
                 region,
                 roms: g
@@ -85,10 +95,10 @@ pub fn parse_dat(xml: &str) -> anyhow::Result<ParsedDat> {
                     .into_iter()
                     .map(|r| DatRomImport {
                         name: r.name,
-                        size: r.size,
-                        crc32: r.crc,
-                        md5: r.md5,
-                        sha1: r.sha1,
+                        size: non_empty(r.size).and_then(|s| s.parse::<i64>().ok()),
+                        crc32: non_empty(r.crc),
+                        md5: non_empty(r.md5),
+                        sha1: non_empty(r.sha1),
                     })
                     .collect(),
             }

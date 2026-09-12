@@ -1,3 +1,4 @@
+mod art;
 mod commands;
 mod dat;
 mod db;
@@ -13,6 +14,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(|app| {
             let app_dir = app
                 .path()
@@ -28,6 +30,7 @@ pub fn run() {
                 db: std::sync::Mutex::new(conn),
                 cancel_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -39,11 +42,21 @@ pub fn run() {
             commands::settings::set_system_emulator,
             commands::dat::pick_dat_file,
             commands::dat::import_dat_file,
+            commands::dat::pick_dat_folder,
+            commands::dat::import_dat_folder,
             commands::dat::fetch_dat_file,
             commands::dat::has_known_dat_source,
+            commands::dat::set_system_dat_url,
+            commands::dat::list_dat_sources,
+            commands::dat::remove_dat_source,
             commands::scan::scan_library,
             commands::hash::hash_pending_roms,
             commands::control::cancel_scan,
+            commands::art::has_known_box_art_source,
+            commands::art::get_box_art,
+            commands::art::fetch_box_art,
+            commands::art::fetch_all_box_art,
+            commands::art::pick_and_set_box_art,
             commands::roms::list_roms,
             commands::roms::get_rom_details,
         ])

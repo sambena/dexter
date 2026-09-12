@@ -7,9 +7,18 @@ pub struct SystemDto {
     pub folder_name: String,
     pub emulator_path: Option<String>,
     pub emulator_args: Option<String>,
+    pub dat_url: Option<String>,
+    pub has_dat: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DatSourceDto {
+    pub id: i64,
+    pub system_id: i64,
+    pub file_name: String,
     pub dat_name: Option<String>,
     pub dat_version: Option<String>,
-    pub dat_imported_at: Option<String>,
+    pub imported_at: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -21,8 +30,25 @@ pub struct Settings {
 pub struct DatImportSummary {
     pub games_imported: i64,
     pub roms_imported: i64,
+    pub newly_matched: i64,
     pub dat_name: Option<String>,
     pub dat_version: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DatFolderImportedEntry {
+    pub newly_matched: i64,
+    pub file_name: String,
+    pub system_name: String,
+    pub games_imported: i64,
+    pub roms_imported: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct DatFolderImportSummary {
+    pub imported: Vec<DatFolderImportedEntry>,
+    pub unmatched: Vec<String>,
+    pub errors: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -46,6 +72,7 @@ pub struct RomDetailsDto {
     pub year: Option<String>,
     pub region: Option<String>,
     pub display_name: String,
+    pub metadata_guessed: bool,
     pub match_status: String,
     pub crc32: Option<String>,
     pub md5: Option<String>,
@@ -78,4 +105,12 @@ pub struct ScanProgress {
     pub current: usize,
     pub total: usize,
     pub current_file: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ArtFetchSummary {
+    pub attempted: i64,
+    pub downloaded: i64,
+    pub not_found: i64,
+    pub errors: Vec<String>,
 }

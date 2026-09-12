@@ -10,9 +10,11 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           <h2>Settings</h2>
           <button onClick={onClose}>Close</button>
         </div>
-        <FolderPicker />
-        <DatImportPanel />
-        <EmulatorMappingTable />
+        <div className="modal-body">
+          <FolderPicker />
+          <DatImportPanel />
+          <EmulatorMappingTable />
+        </div>
       </div>
     </div>
   );

@@ -1,3 +1,4 @@
+pub mod art;
 pub mod control;
 pub mod dat;
 pub mod hash;

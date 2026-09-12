@@ -1,6 +1,7 @@
 import { useLibrary } from "../../state/useLibraryStore";
 import { FilterBar } from "./FilterBar";
 import { RomListItem } from "./RomListItem";
+import { StatusLegend } from "./StatusLegend";
 
 export function RomList() {
   const { roms, loading, selectedRomId, setSelectedRomId, settings } = useLibrary();
@@ -8,6 +9,7 @@ export function RomList() {
   return (
     <div className="rom-list-container">
       <FilterBar />
+      <StatusLegend />
       {loading && <p className="hint">Loading…</p>}
       {!loading && !settings.rom_root_path && (
         <p className="hint">No ROM folder configured yet. Open Settings to choose one.</p>
