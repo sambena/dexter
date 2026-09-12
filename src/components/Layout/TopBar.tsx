@@ -11,7 +11,15 @@ type Summary =
   | { job: "scan" | "hash"; summary: ScanSummary }
   | { job: "art"; summary: ArtFetchSummary };
 
-const emptyScanSummary: ScanSummary = { scanned_files: 0, pending: 0, matched: 0, unmatched: 0, removed: 0, errors: [] };
+const emptyScanSummary: ScanSummary = {
+  scanned_files: 0,
+  pending: 0,
+  matched: 0,
+  unmatched: 0,
+  unverifiable: 0,
+  removed: 0,
+  errors: [],
+};
 const emptyArtSummary: ArtFetchSummary = { attempted: 0, downloaded: 0, not_found: 0, errors: [] };
 
 export function TopBar({
@@ -111,6 +119,7 @@ export function TopBar({
             {lastSummary.job === "scan" && (
               <>
                 Found {lastSummary.summary.scanned_files} files · {lastSummary.summary.pending} ready to hash
+                {lastSummary.summary.unverifiable > 0 ? ` · ${lastSummary.summary.unverifiable} can't verify` : ""}
                 {lastSummary.summary.removed > 0 ? ` · ${lastSummary.summary.removed} removed` : ""}
               </>
             )}

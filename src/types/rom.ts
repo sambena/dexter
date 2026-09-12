@@ -23,7 +23,7 @@ export interface RomListItemDto {
   system_id: number | null;
   system_name: string | null;
   display_name: string;
-  match_status: "matched" | "unmatched" | "pending" | "error" | string;
+  match_status: "matched" | "unmatched" | "unverifiable" | "pending" | "error" | string;
 }
 
 export interface RomDetailsDto {
@@ -61,6 +61,7 @@ export interface ScanSummary {
   pending: number;
   matched: number;
   unmatched: number;
+  unverifiable: number;
   removed: number;
   errors: string[];
 }

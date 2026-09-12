@@ -110,6 +110,10 @@ function matchStatusExplanation(details: RomDetailsDto, hasDat: boolean, folderN
       return null;
     case "pending":
       return "Found by Scan Files but not hashed yet — run Hash & Match.";
+    case "unverifiable":
+      return details.archive_member == null && !/\.[a-z0-9]{1,6}$/i.test(details.file_name)
+        ? "This is an extracted title folder (thousands of files), which no DAT describes as one dump, so it can't be verified."
+        : "This format can't be checked against a DAT: compressed or trimmed disc images (.rvz, .wbfs, .chd, …) and .ecm files store the disc re-encoded, and Dexter can't look inside .rar or .7z. To verify it, convert it back to the original dump (e.g. .iso or .bin/.cue) and re-scan.";
     case "error":
       return "Hashing failed last time (e.g. a network read error). Hash & Match will retry it automatically.";
     case "unmatched": {

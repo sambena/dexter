@@ -1,6 +1,11 @@
 const ITEMS: Array<{ status: string; label: string; hint: string }> = [
   { status: "matched", label: "Matched", hint: "Hash matched a known entry in an imported DAT." },
   { status: "unmatched", label: "Unmatched", hint: "Hashed, but no DAT entry matched — see a ROM's details for why." },
+  {
+    status: "unverifiable",
+    label: "Can't verify",
+    hint: "In a form no DAT can confirm: a compressed disc image, an archive Dexter can't open, or an extracted Wii U title.",
+  },
   { status: "pending", label: "Not hashed", hint: "Found by Scan Files, waiting for Hash & Match to run." },
   { status: "error", label: "Error", hint: "Hashing failed (e.g. a network read error) — Hash & Match will retry it automatically." },
 ];

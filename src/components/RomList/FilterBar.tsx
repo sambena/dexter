@@ -32,6 +32,7 @@ export function FilterBar() {
         <option value="pending">Not hashed yet</option>
         <option value="matched">Matched</option>
         <option value="unmatched">Unmatched</option>
+        <option value="unverifiable">Can't verify</option>
         <option value="error">Errors</option>
       </select>
     </div>

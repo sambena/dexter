@@ -163,7 +163,45 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     if version < 6 {
         conn.execute_batch(&format!("BEGIN; {} PRAGMA user_version = 6; COMMIT;", SCHEMA_V6))?;
     }
+    if version < 7 {
+        migrate_v7_unverifiable(conn)?;
+    }
     Ok(())
+}
+
+/// Moves ROMs that hashing can never verify out of "unmatched"/"pending" into
+/// the new "unverifiable" status. Done in Rust rather than SQL so the list of
+/// formats lives in one place (scanner::formats), shared with the scanner.
+fn migrate_v7_unverifiable(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch("BEGIN;")?;
+    let result = (|| {
+        let candidates: Vec<(i64, String, bool)> = {
+            let mut stmt = conn.prepare(
+                "SELECT id, file_name,
+                        -- Folder dumps were the only unmatched rows never hashed.
+                        match_status = 'unmatched' AND crc32 IS NULL AND size IS NULL AND archive_member IS NULL
+                 FROM roms WHERE match_status IN ('unmatched', 'pending', 'error')",
+            )?;
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        for (id, file_name, is_folder_dump) in candidates {
+            if is_folder_dump || crate::scanner::formats::is_unverifiable(&file_name) {
+                conn.execute(
+                    "UPDATE roms SET match_status = 'unverifiable', dat_rom_id = NULL WHERE id = ?1",
+                    [id],
+                )?;
+            }
+        }
+        conn.execute_batch("PRAGMA user_version = 7;")
+    })();
+    match result {
+        Ok(()) => conn.execute_batch("COMMIT;"),
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK;");
+            Err(e)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -179,11 +217,11 @@ mod tests {
         conn.execute_batch(
             "PRAGMA user_version = 4;
              INSERT INTO systems (id, name, folder_name) VALUES (1, 'NES', 'NES');
-             INSERT INTO roms (file_path, file_name, match_status, last_scanned_at, system_id) VALUES
-               ('a.zip::1942.nes', '1942.nes', 'unmatched', '', 1),
-               ('b.smc', 'Aerobiz.SMC', 'error', '', 1),
-               ('c.nes', 'Contra.nes', 'matched', '', 1),
-               ('d.gba', 'Metroid.gba', 'unmatched', '', 1);",
+             INSERT INTO roms (file_path, file_name, crc32, match_status, last_scanned_at, system_id) VALUES
+               ('a.zip::1942.nes', '1942.nes', '42c89db5', 'unmatched', '', 1),
+               ('b.smc', 'Aerobiz.SMC', NULL, 'error', '', 1),
+               ('c.nes', 'Contra.nes', '11111111', 'matched', '', 1),
+               ('d.gba', 'Metroid.gba', '22222222', 'unmatched', '', 1);",
         )
         .unwrap();
 
@@ -198,7 +236,39 @@ mod tests {
         assert_eq!(status("Contra.nes"), "matched");
         assert_eq!(status("Metroid.gba"), "unmatched");
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(version, 6);
+        assert_eq!(version, 7);
+    }
+
+    #[test]
+    fn v7_marks_folder_dumps_and_unhashable_formats_unverifiable() {
+        let conn = Connection::open_in_memory().unwrap();
+        for sql in [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6] {
+            conn.execute_batch(sql).unwrap();
+        }
+        conn.execute_batch(
+            "PRAGMA user_version = 6;
+             INSERT INTO roms (file_path, file_name, size, crc32, archive_member, match_status, last_scanned_at) VALUES
+               ('a', 'F-Zero GX (USA).rvz', 100, 'abcd1234', NULL, 'unmatched', ''),
+               ('b', 'MARIO KART 8 [AMKE01]', NULL, NULL, NULL, 'unmatched', ''),
+               ('c', 'FF7 (Disc 1).bin.ecm', 100, NULL, NULL, 'pending', ''),
+               ('d', 'Super Mario 64.z64', 100, 'abcd1234', NULL, 'unmatched', ''),
+               ('e', 'Pending Game.sfc', 100, NULL, NULL, 'pending', ''),
+               ('f', 'Weird.rvz', 100, 'abcd1234', NULL, 'matched', '');",
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+
+        let status = |name: &str| -> String {
+            conn.query_row("SELECT match_status FROM roms WHERE file_name = ?1", [name], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(status("F-Zero GX (USA).rvz"), "unverifiable");
+        assert_eq!(status("MARIO KART 8 [AMKE01]"), "unverifiable");
+        assert_eq!(status("FF7 (Disc 1).bin.ecm"), "unverifiable");
+        assert_eq!(status("Super Mario 64.z64"), "unmatched");
+        assert_eq!(status("Pending Game.sfc"), "pending");
+        assert_eq!(status("Weird.rvz"), "matched");
     }
 
     #[test]

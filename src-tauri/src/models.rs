@@ -101,6 +101,8 @@ pub struct ScanSummary {
     pub pending: i64,
     pub matched: i64,
     pub unmatched: i64,
+    /// Found, but in a form hashing can't verify (see scanner::formats).
+    pub unverifiable: i64,
     pub removed: i64,
     pub errors: Vec<String>,
 }

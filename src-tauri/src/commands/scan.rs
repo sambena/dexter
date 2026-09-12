@@ -1,7 +1,7 @@
 use crate::db::repo;
 use crate::models::{ScanProgress, ScanSummary};
 use crate::scanner::walker::ScanTarget;
-use crate::scanner::{archive, walker};
+use crate::scanner::{archive, formats, walker};
 use crate::state::AppState;
 use std::sync::atomic::Ordering;
 use tauri::{Emitter, State};
@@ -76,16 +76,23 @@ pub async fn scan_library(app: tauri::AppHandle, state: State<'_, AppState>) -> 
                     .and_then(|n| n.to_str())
                     .unwrap_or_default()
                     .to_string();
-                repo::upsert_folder_rom(&conn, *system_id, &path.display().to_string(), &file_name)
+                repo::upsert_unverifiable_rom(&conn, *system_id, &path.display().to_string(), &file_name, None, None)
                     .map_err(|e| e.to_string())?;
-                summary.unmatched += 1;
+                summary.unverifiable += 1;
                 summary.scanned_files += 1;
             }
             ScanTarget::File(path) if is_zip(path) => match archive::list_zip_entries(path) {
                 Ok(entries) => {
                     for entry in entries {
                         let file_path = format!("{}::{}", path.display(), entry.inner_name);
-                        repo::upsert_pending_rom(
+                        let upsert = if formats::is_unverifiable(&entry.inner_name) {
+                            summary.unverifiable += 1;
+                            repo::upsert_unverifiable_rom
+                        } else {
+                            summary.pending += 1;
+                            repo::upsert_pending_rom
+                        };
+                        upsert(
                             &conn,
                             *system_id,
                             &file_path,
@@ -94,7 +101,6 @@ pub async fn scan_library(app: tauri::AppHandle, state: State<'_, AppState>) -> 
                             Some(&entry.inner_name),
                         )
                         .map_err(|e| e.to_string())?;
-                        summary.pending += 1;
                         summary.scanned_files += 1;
                     }
                 }
@@ -107,9 +113,15 @@ pub async fn scan_library(app: tauri::AppHandle, state: State<'_, AppState>) -> 
                     .unwrap_or_default()
                     .to_string();
                 let size = std::fs::metadata(path).ok().map(|m| m.len() as i64);
-                repo::upsert_pending_rom(&conn, *system_id, &path.display().to_string(), &file_name, size, None)
+                let upsert = if formats::is_unverifiable(&file_name) {
+                    summary.unverifiable += 1;
+                    repo::upsert_unverifiable_rom
+                } else {
+                    summary.pending += 1;
+                    repo::upsert_pending_rom
+                };
+                upsert(&conn, *system_id, &path.display().to_string(), &file_name, size, None)
                     .map_err(|e| e.to_string())?;
-                summary.pending += 1;
                 summary.scanned_files += 1;
             }
         }

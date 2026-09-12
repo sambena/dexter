@@ -410,24 +410,32 @@ pub fn upsert_pending_rom(
     Ok(())
 }
 
-/// Quick-scan insert for a whole-folder ROM dump (e.g. an extracted Wii U title) —
-/// these are never hashed, so they go straight to "unmatched".
-pub fn upsert_folder_rom(
+/// Quick-scan insert for something hashing can't verify: a whole-folder dump
+/// (e.g. an extracted Wii U title) or a format like .rvz (see
+/// scanner::formats). These skip Hash & Match and go straight to
+/// "unverifiable"; a row recorded under an older rule is converted too.
+pub fn upsert_unverifiable_rom(
     conn: &Connection,
     system_id: i64,
     file_path: &str,
     file_name: &str,
+    size: Option<i64>,
+    archive_member: Option<&str>,
 ) -> rusqlite::Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
-        "INSERT INTO roms (system_id, file_path, file_name, match_status, last_scanned_at, seen_this_scan)
-         VALUES (?1, ?2, ?3, 'unmatched', ?4, 1)
+        "INSERT INTO roms (system_id, file_path, file_name, size, archive_member, match_status, last_scanned_at, seen_this_scan)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'unverifiable', ?6, 1)
          ON CONFLICT(file_path) DO UPDATE SET
             system_id = excluded.system_id,
             file_name = excluded.file_name,
-            last_scanned_at = ?4,
+            size = COALESCE(roms.size, excluded.size),
+            archive_member = excluded.archive_member,
+            match_status = 'unverifiable',
+            dat_rom_id = NULL,
+            last_scanned_at = ?6,
             seen_this_scan = 1",
-        params![system_id, file_path, file_name, now],
+        params![system_id, file_path, file_name, size, archive_member, now],
     )?;
     Ok(())
 }
