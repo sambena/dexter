@@ -50,6 +50,13 @@ export interface RomDetailsDto {
   emulator_core: string | null;
   /** How a match was found when the file isn't the DAT's exact dump. */
   match_note: "overdump" | "header" | "mirrored" | "cue-tracks" | null;
+  /** From a title folder's own XML (Wii U). */
+  title_id: string | null;
+  title_version: number | null;
+  title_kind: "game" | "update" | "dlc" | "demo" | null;
+  product_code: string | null;
+  /** Named from a DAT game found by title, not verified by hash. */
+  identified_by_title: boolean;
 }
 
 export interface RomFilter {
@@ -118,6 +125,8 @@ export interface DuplicateFileDto {
 export interface DuplicateGroupDto {
   sha1: string;
   files: DuplicateFileDto[];
+  /** Folder dumps of the same title and version, not compared byte for byte. */
+  same_title: boolean;
 }
 
 export interface RenamePlanEntryDto {

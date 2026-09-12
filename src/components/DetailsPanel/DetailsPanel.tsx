@@ -65,9 +65,9 @@ function BoxArt({ details }: { details: RomDetailsDto }) {
       <div className="box-art-actions">
         <button
           onClick={fetchArt}
-          disabled={busy || details.match_status !== "matched" || !knownSource}
+          disabled={busy || !(details.match_status === "matched" || details.identified_by_title) || !knownSource}
           title={
-            details.match_status !== "matched"
+            !(details.match_status === "matched" || details.identified_by_title)
               ? "This ROM isn't matched to a DAT entry yet — run Hash & Match, making sure a DAT is imported for this system, then try again."
               : !knownSource
                 ? "No known box art source for this system yet."
@@ -159,6 +159,10 @@ function matchStatusExplanation(details: RomDetailsDto, hasDat: boolean, folderN
     case "pending":
       return "Found by Scan Files but not hashed yet — run Hash & Match.";
     case "unverifiable":
+      if (details.title_kind === "update" || details.title_kind === "dlc")
+        return `This is ${details.title_kind === "update" ? "an update" : "DLC"}, not a game you can start on its own. To use it, install it into the emulator (in Cemu: File → Install game title, update or DLC), then play the game. Like any extracted title folder, it can't be verified by hash.`;
+      if (details.identified_by_title)
+        return "This extracted title folder was identified from the title's own information and matched to the DAT by name, but its thousands of files can't be verified by hash the way a single dump can.";
       return details.archive_member == null && !/\.[a-z0-9]{1,6}$/i.test(details.file_name)
         ? "This is an extracted title folder (thousands of files), which no DAT describes as one dump, so it can't be verified."
         : /\.(nsp|xci|nsz|xcz)$/i.test(details.file_name)
@@ -251,6 +255,8 @@ ${rom.file_path}
     };
   }, [selectedRomId]);
 
+  const isAddOn = details?.title_kind === "update" || details?.title_kind === "dlc";
+
   if (!details) {
     return (
       <div className="details-panel details-empty">
@@ -270,6 +276,11 @@ ${rom.file_path}
               Guessed from filename, not verified
             </p>
           )}
+          {details.identified_by_title && (
+            <p className="guessed-note" title="Found in the DAT by the title's name and region, not by comparing hashes.">
+              Identified by title, not verified
+            </p>
+          )}
         </div>
       </div>
       <dl>
@@ -285,6 +296,20 @@ ${rom.file_path}
 
         <dt>System</dt>
         <dd>{details.system_name ?? "Unknown"}</dd>
+
+        {details.title_id && (
+          <>
+            <dt>Title</dt>
+            <dd>
+              {{ game: "Game", update: "Update", dlc: "DLC", demo: "Demo" }[details.title_kind ?? "game"]}
+              {details.title_version != null ? ` · version ${details.title_version}` : ""}
+              <span className="mono title-id" title={details.product_code ?? undefined}>
+                {" "}
+                {details.title_id}
+              </span>
+            </dd>
+          </>
+        )}
 
         <dt>Year</dt>
         <dd>{details.year ?? "—"}</dd>
@@ -352,12 +377,14 @@ ${rom.file_path}
       <div className="details-actions">
         <button
           onClick={() => launch(details)}
-          disabled={launching || !(details.emulator_path || details.emulator_core)}
+          disabled={launching || !(details.emulator_path || details.emulator_core) || isAddOn}
           className="primary"
           title={
-            details.emulator_path || details.emulator_core
-              ? undefined
-              : `No emulator is set for ${details.system_name ?? "this system"}. Choose one in Settings → Emulators.`
+            isAddOn
+              ? "Updates and DLC can't be started on their own. Install them into the emulator, then play the game."
+              : details.emulator_path || details.emulator_core
+                ? undefined
+                : `No emulator is set for ${details.system_name ?? "this system"}. Choose one in Settings → Emulators.`
           }
         >
           {launching && <span className="spinner inline" aria-hidden="true" />}

@@ -172,8 +172,27 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     if version < 9 {
         migrate_v9_repairs(conn)?;
     }
+    if version < 10 {
+        conn.execute_batch(&format!("BEGIN; {} PRAGMA user_version = 10; COMMIT;", SCHEMA_V10))?;
+    }
     Ok(())
 }
+
+const SCHEMA_V10: &str = r#"
+-- What an extracted title folder (Wii U) says about itself, read from its
+-- code/app.xml and meta/meta.xml on each scan (scanner::wiiu). NULL for
+-- everything else.
+ALTER TABLE roms ADD COLUMN title_id TEXT;
+ALTER TABLE roms ADD COLUMN title_version INTEGER;
+ALTER TABLE roms ADD COLUMN title_kind TEXT;   -- 'game', 'update', 'dlc' or 'demo'
+ALTER TABLE roms ADD COLUMN title_name TEXT;
+ALTER TABLE roms ADD COLUMN product_code TEXT;
+
+-- The DAT game a file was identified as by its title rather than its hash,
+-- for dumps that can't be verified. Unlike dat_rom_id this doesn't make the
+-- file "matched"; it supplies the name, region and box art.
+ALTER TABLE roms ADD COLUMN identified_game_id INTEGER REFERENCES dat_games(id) ON DELETE SET NULL;
+"#;
 
 const SCHEMA_V9: &str = r#"
 -- How a match was found when the file isn't byte-for-byte the DAT's dump
@@ -295,7 +314,7 @@ mod tests {
         assert_eq!(status("Contra.nes"), "matched");
         assert_eq!(status("Metroid.gba"), "unmatched");
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(version, 9);
+        assert_eq!(version, 10);
     }
 
     #[test]

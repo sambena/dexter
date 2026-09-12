@@ -146,8 +146,8 @@ export function DuplicatesPanel() {
       </div>
 
       <p className="hint">
-        Files that are byte-for-byte identical, grouped by hash. Every copy in a group is interchangeable, so
-        keeping any one of them loses nothing. Deleted files can be restored: from the Recycle Bin for files on
+        Files that are byte-for-byte identical, grouped by hash, plus extracted title folders (Wii U) with the
+        same title and version. Every copy in a group is interchangeable, so keeping any one of them loses nothing. Deleted files can be restored: from the Recycle Bin for files on
         this PC, or from the "_Deleted by Dexter" folder for files on a network share.
       </p>
 
@@ -162,9 +162,15 @@ export function DuplicatesPanel() {
             <div key={g.sha1} className="dupe-group">
               <div className="dupe-group-title">
                 {g.files[0].display_name}
-                <span className="mono dupe-hash" title={g.sha1}>
-                  {g.sha1.slice(0, 12)}
-                </span>
+                {g.same_title ? (
+                  <span className="dupe-hash" title="Extracted title folders can't be compared byte for byte, but these have the same title ID and version.">
+                    same title and version
+                  </span>
+                ) : (
+                  <span className="mono dupe-hash" title={g.sha1}>
+                    {g.sha1.slice(0, 12)}
+                  </span>
+                )}
               </div>
               {g.files.map((f) => (
                 <label key={f.id} className="dupe-file">

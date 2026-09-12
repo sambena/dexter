@@ -87,6 +87,13 @@ pub async fn launch_rom(rom_id: i64, app: tauri::AppHandle) -> Result<(), String
         }
         .ok_or_else(|| "This ROM is no longer in the library.".to_string())?;
 
+        if let Some(kind @ ("update" | "dlc")) = details.title_kind.as_deref() {
+            return Err(format!(
+                "This is {} for a game, not a game, so it can't be started on its own. Install it into the emulator (in Cemu: File → Install game title, update or DLC), then play the game.",
+                if kind == "update" { "an update" } else { "DLC" }
+            ));
+        }
+
         // A zipped ROM is launched by handing over the archive itself, which
         // RetroArch and most standalone emulators open directly.
         let rom_path = on_disk_path(&details.file_path, details.archive_member.as_deref());

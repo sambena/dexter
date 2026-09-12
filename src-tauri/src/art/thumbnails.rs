@@ -94,7 +94,9 @@ pub fn http_client() -> anyhow::Result<reqwest::blocking::Client> {
 pub fn fetch_box_art(client: &reqwest::blocking::Client, folder_name: &str, game_name: &str) -> anyhow::Result<Vec<u8>> {
     let repo = thumbnails_repo(folder_name)
         .ok_or_else(|| anyhow::anyhow!("No known box art source for system \"{}\".", folder_name))?;
-    let file_name = encode_path_segment(&sanitize_name(game_name));
+    // Updates and DLC share their game's box, which is listed without the tag.
+    let game_name = game_name.replace(" (Update)", "").replace(" (DLC)", "");
+    let file_name = encode_path_segment(&sanitize_name(&game_name));
     let url = format!(
         "https://raw.githubusercontent.com/libretro-thumbnails/{}/master/Named_Boxarts/{}.png",
         repo, file_name

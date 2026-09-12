@@ -1,7 +1,7 @@
 use crate::db::repo;
 use crate::models::{ScanProgress, ScanSummary};
 use crate::scanner::walker::ScanTarget;
-use crate::scanner::{archive, formats, walker};
+use crate::scanner::{archive, formats, walker, wiiu};
 use crate::state::AppState;
 use std::sync::atomic::Ordering;
 use tauri::{Emitter, State};
@@ -67,6 +67,11 @@ pub async fn scan_library(app: tauri::AppHandle, state: State<'_, AppState>) -> 
             );
         }
 
+        // Read before taking the lock: it's a couple of small files over the network.
+        let title_info = match target {
+            ScanTarget::FolderRom(path) => wiiu::read_title_info(path),
+            ScanTarget::File(_) => None,
+        };
         let conn = state.db.lock().map_err(|e| e.to_string())?;
 
         match target {
@@ -76,8 +81,10 @@ pub async fn scan_library(app: tauri::AppHandle, state: State<'_, AppState>) -> 
                     .and_then(|n| n.to_str())
                     .unwrap_or_default()
                     .to_string();
-                repo::upsert_unverifiable_rom(&conn, *system_id, &path.display().to_string(), &file_name, None, None)
+                let file_path = path.display().to_string();
+                repo::upsert_unverifiable_rom(&conn, *system_id, &file_path, &file_name, None, None)
                     .map_err(|e| e.to_string())?;
+                repo::set_title_info(&conn, &file_path, title_info.as_ref()).map_err(|e| e.to_string())?;
                 summary.unverifiable += 1;
                 summary.scanned_files += 1;
             }
@@ -132,6 +139,7 @@ pub async fn scan_library(app: tauri::AppHandle, state: State<'_, AppState>) -> 
         for folder in &system_folders {
             if let Ok(system_id) = repo::get_or_create_system_by_folder(&conn, &folder.folder_name) {
                 summary.removed += repo::prune_system_unseen(&conn, system_id).map_err(|e| e.to_string())?;
+                repo::identify_titles(&conn, Some(system_id)).map_err(|e| e.to_string())?;
             }
         }
     }

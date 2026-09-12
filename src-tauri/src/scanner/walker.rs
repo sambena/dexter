@@ -66,6 +66,22 @@ fn has_skipped_extension(path: &Path) -> bool {
     }
 }
 
+/// Later volumes of a split RAR archive ("x.part02.rar", or old-style "x.r00").
+/// The set is one game, listed once through its first volume.
+fn is_later_rar_volume(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()).map(str::to_lowercase) else {
+        return false;
+    };
+    if let Some(stem) = name.strip_suffix(".rar") {
+        if let Some((_, part)) = stem.rsplit_once(".part") {
+            return part.parse::<u32>().is_ok_and(|n| n > 1);
+        }
+        return false;
+    }
+    let ext = name.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
+    ext.len() == 3 && ext.starts_with('r') && ext[1..].chars().all(|c| c.is_ascii_digit())
+}
+
 /// Detects an extracted/decrypted Wii U title dump: a folder with a `meta/meta.xml`
 /// (the standard layout produced by CDecrypt and similar tools, alongside `code/`
 /// and `content/`). Such a "ROM" is really thousands of loose asset files, so the
@@ -108,7 +124,7 @@ pub fn list_scan_targets(system_dir: &Path) -> Vec<ScanTarget> {
             }
             continue;
         }
-        if !has_skipped_extension(entry.path()) {
+        if !has_skipped_extension(entry.path()) && !is_later_rar_volume(entry.path()) {
             results.push(ScanTarget::File(entry.into_path()));
         }
     }
@@ -130,6 +146,16 @@ mod tests {
     fn rom_files_are_kept() {
         for name in ["Super Mario Bros..nes", "Aerobiz.smc", "F-Zero GX (USA).rvz", "game.zip", "Wii U Title"] {
             assert!(!has_skipped_extension(Path::new(name)), "{} should be kept", name);
+        }
+    }
+
+    #[test]
+    fn split_rar_sets_are_listed_once() {
+        for name in ["Zelda [AZAP01].part02.rar", "Zelda [AZAP01].PART09.rar", "game.r00", "game.r15"] {
+            assert!(is_later_rar_volume(Path::new(name)), "{} is a later volume", name);
+        }
+        for name in ["Zelda [AZAP01].part01.rar", "game.rar", "Party.rar", "game.rom", "Wii U Title"] {
+            assert!(!is_later_rar_volume(Path::new(name)), "{} is listed", name);
         }
     }
 }

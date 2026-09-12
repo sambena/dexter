@@ -91,6 +91,15 @@ pub struct RomDetailsDto {
     /// dump: "overdump", "header", "mirrored" (see scanner::repair) or
     /// "cue-tracks" (a cue sheet whose tracks all matched).
     pub match_note: Option<String>,
+    /// From a title folder's own XML (Wii U), when it has one.
+    pub title_id: Option<String>,
+    pub title_version: Option<i64>,
+    /// "game", "update", "dlc" or "demo".
+    pub title_kind: Option<String>,
+    pub product_code: Option<String>,
+    /// The name and region come from a DAT game found by title, not by hash:
+    /// the file is identified but not verified.
+    pub identified_by_title: bool,
 }
 
 /// One way to run a system, as offered in the emulator dropdown.
@@ -212,8 +221,13 @@ pub struct DuplicateFileDto {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DuplicateGroupDto {
+    /// The shared SHA1, or for same-title groups "title:<title id>:v<version>".
     pub sha1: String,
     pub files: Vec<DuplicateFileDto>,
+    /// Folder dumps of the same title and version, which can't be compared
+    /// byte for byte but hold the same thing.
+    #[serde(default)]
+    pub same_title: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
