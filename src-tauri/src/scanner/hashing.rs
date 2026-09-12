@@ -21,7 +21,16 @@ pub struct FileHashes {
 
 pub struct Headerless {
     pub header_size: u64,
+    /// Bytes also left off the end, e.g. a title tag appended by a ROM site.
+    pub trailer_size: u64,
     pub digests: Digests,
+}
+
+/// Bytes at either end of a file that aren't part of the ROM data DATs hash.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Framing {
+    pub header: u64,
+    pub trailer: u64,
 }
 
 /// Extensions of SNES dumps that may carry a 512-byte copier header.
@@ -31,18 +40,35 @@ const SNES_EXTENSIONS: &[&str] = &["smc", "sfc", "swc", "fig"];
 /// every header detected here.
 const PEEK_BYTES: usize = 512;
 
-/// Size of the header at the start of a ROM, if it has one that DATs exclude.
+/// NES PRG and CHR data come in whole 8 KiB blocks.
+const NES_DATA_UNIT: u64 = 8192;
+/// iNES flags 6, bit 2: a 512-byte trainer sits between header and data.
+const INES_TRAINER_FLAG: u8 = 0x04;
+
+/// Bytes at the start and end of a ROM that DATs leave out of their hashes.
 ///
 /// - NES (iNES) and Famicom Disk System (fwNES) dumps start with a 16-byte
 ///   header marked by a magic number. No-Intro's headerless DATs hash the
 ///   data after it, and its headered DAT expects a clean header that old
 ///   dumps often don't have (e.g. "DiskDude!" written into the padding).
+/// - NES dumps can also end with bytes past the last whole 8 KiB block: some
+///   ROM sites append a ~128-byte title tag (e.g. "10 Yard Fight  (Vimm's
+///   Lair - http://vimm.net)"). Dumps with a trainer are left untrimmed,
+///   since their layout isn't plain header + data.
 /// - SNES dumps from copier devices carry a 512-byte header with no magic
 ///   number; it shows as a file size 512 bytes over a multiple of 1024,
 ///   which real cartridge data never is.
-pub fn detect_header(file_name: &str, size: Option<u64>, start: &[u8]) -> Option<u64> {
-    if start.len() >= 16 && (start.starts_with(b"NES\x1a") || start.starts_with(b"FDS\x1a")) {
-        return Some(16);
+pub fn detect_framing(file_name: &str, size: Option<u64>, start: &[u8]) -> Option<Framing> {
+    if start.len() >= 16 && start.starts_with(b"NES\x1a") {
+        let has_trainer = start[6] & INES_TRAINER_FLAG != 0;
+        let trailer = match size {
+            Some(size) if !has_trainer && size > 16 => (size - 16) % NES_DATA_UNIT,
+            _ => 0,
+        };
+        return Some(Framing { header: 16, trailer });
+    }
+    if start.len() >= 16 && start.starts_with(b"FDS\x1a") {
+        return Some(Framing { header: 16, trailer: 0 });
     }
     let ext = Path::new(file_name)
         .extension()
@@ -50,7 +76,7 @@ pub fn detect_header(file_name: &str, size: Option<u64>, start: &[u8]) -> Option
         .map(|e| e.to_ascii_lowercase());
     let is_snes = ext.as_deref().is_some_and(|e| SNES_EXTENSIONS.contains(&e));
     match size {
-        Some(size) if is_snes && size > 512 && size % 1024 == 512 => Some(512),
+        Some(size) if is_snes && size > 512 && size % 1024 == 512 => Some(Framing { header: 512, trailer: 0 }),
         _ => None,
     }
 }
@@ -99,18 +125,26 @@ fn read_up_to<R: Read>(reader: &mut R, buf: &mut [u8]) -> std::io::Result<usize>
 pub fn hash_reader<R: Read>(mut reader: R, file_name: &str, size: Option<u64>) -> std::io::Result<FileHashes> {
     let mut buf = vec![0u8; 65536];
     let peeked = read_up_to(&mut reader, &mut buf[..PEEK_BYTES])?;
-    let header_size = detect_header(file_name, size, &buf[..peeked]);
+    let framing = detect_framing(file_name, size, &buf[..peeked]);
+    // The body is the byte range [header, size - trailer). A trailer is only
+    // ever detected when the size is known.
+    let body_end = match (framing, size) {
+        (Some(f), Some(size)) => size.saturating_sub(f.trailer),
+        _ => u64::MAX,
+    };
 
     let mut full = Hasher::new();
-    let mut body = header_size.map(|_| Hasher::new());
+    let mut body = framing.map(|_| Hasher::new());
     let mut position = 0u64;
     let mut chunk_len = peeked;
     while chunk_len > 0 {
         let chunk = &buf[..chunk_len];
         full.update(chunk);
-        if let (Some(body), Some(header)) = (body.as_mut(), header_size) {
-            let skip = header.saturating_sub(position).min(chunk_len as u64) as usize;
-            body.update(&chunk[skip..]);
+        if let (Some(body), Some(f)) = (body.as_mut(), framing) {
+            let end_of_chunk = position + chunk_len as u64;
+            let from = f.header.clamp(position, end_of_chunk);
+            let to = body_end.clamp(from, end_of_chunk);
+            body.update(&chunk[(from - position) as usize..(to - position) as usize]);
         }
         position += chunk_len as u64;
         chunk_len = reader.read(&mut buf)?;
@@ -119,11 +153,11 @@ pub fn hash_reader<R: Read>(mut reader: R, file_name: &str, size: Option<u64>) -
     Ok(FileHashes {
         size: position,
         full: full.finish(),
-        headerless: header_size
+        headerless: framing
             .zip(body)
-            // A file no bigger than its supposed header has no data to match.
-            .filter(|(header, _)| position > *header)
-            .map(|(header_size, body)| Headerless { header_size, digests: body.finish() }),
+            // A file no bigger than its framing has no data to match.
+            .filter(|(f, _)| position > f.header + f.trailer)
+            .map(|(f, body)| Headerless { header_size: f.header, trailer_size: f.trailer, digests: body.finish() }),
     })
 }
 
@@ -183,13 +217,16 @@ mod tests {
 
     #[test]
     fn copier_header_rule_only_applies_to_snes_extensions() {
-        assert_eq!(detect_header("track.bin", Some(1_049_088), &[0; 16]), None);
-        assert_eq!(detect_header("game.fig", Some(1_049_088), &[0; 16]), Some(512));
+        assert_eq!(detect_framing("track.bin", Some(1_049_088), &[0; 16]), None);
+        assert_eq!(
+            detect_framing("game.fig", Some(1_049_088), &[0; 16]),
+            Some(Framing { header: 512, trailer: 0 })
+        );
     }
 
     #[test]
     fn copier_header_needs_a_known_size() {
-        assert_eq!(detect_header("game.smc", None, &[0; 16]), None);
+        assert_eq!(detect_framing("game.smc", None, &[0; 16]), None);
     }
 
     #[test]
@@ -212,6 +249,53 @@ mod tests {
         let h = hash_reader(Trickle(&rom), "x.nes", None).unwrap();
         assert_eq!(h.full, digests_of(&rom));
         assert_eq!(h.headerless.unwrap().digests, digests_of(&prg));
+    }
+
+    #[test]
+    fn nes_title_trailer_is_left_out() {
+        let prg: Vec<u8> = (0..40960u32).map(|i| (i % 7) as u8).collect();
+        let mut rom = ines(&prg);
+        let mut tag = b"10 Yard Fight  (Vimm's Lair - http://vimm.net)".to_vec();
+        tag.resize(128, 0);
+        rom.extend_from_slice(&tag);
+        let h = hash_reader(&rom[..], "10 Yard Fight.nes", Some(rom.len() as u64)).unwrap();
+        assert_eq!(h.full, digests_of(&rom));
+        let headerless = h.headerless.unwrap();
+        assert_eq!((headerless.header_size, headerless.trailer_size), (16, 128));
+        assert_eq!(headerless.digests, digests_of(&prg));
+    }
+
+    #[test]
+    fn trailer_boundary_mid_chunk_with_trickling_reader() {
+        struct Trickle<'a>(&'a [u8]);
+        impl Read for Trickle<'_> {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                let n = self.0.len().min(buf.len()).min(3000);
+                buf[..n].copy_from_slice(&self.0[..n]);
+                self.0 = &self.0[n..];
+                Ok(n)
+            }
+        }
+        let prg = vec![9u8; 16384];
+        let mut rom = ines(&prg);
+        rom.extend_from_slice(&[b'x'; 127]);
+        let h = hash_reader(Trickle(&rom), "a.nes", Some(rom.len() as u64)).unwrap();
+        assert_eq!(h.headerless.unwrap().digests, digests_of(&prg));
+    }
+
+    #[test]
+    fn nes_trainer_or_unknown_size_is_not_trimmed() {
+        let mut header = *b"NES\x1a\x02\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+        assert_eq!(detect_framing("a.nes", None, &header), Some(Framing { header: 16, trailer: 0 }));
+        header[6] = INES_TRAINER_FLAG;
+        assert_eq!(detect_framing("a.nes", Some(16 + 512 + 40960), &header), Some(Framing { header: 16, trailer: 0 }));
+    }
+
+    #[test]
+    fn fds_is_never_trimmed() {
+        // Disk sides are 65500 bytes, not whole 8 KiB blocks.
+        let header = *b"FDS\x1a\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+        assert_eq!(detect_framing("a.fds", Some(16 + 65500), &header), Some(Framing { header: 16, trailer: 0 }));
     }
 
     #[test]

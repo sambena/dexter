@@ -475,7 +475,8 @@ pub fn update_rom_hash(
     let headerless = hashes.headerless.as_ref();
     conn.execute(
         "UPDATE roms SET size = ?1, crc32 = ?2, md5 = ?3, sha1 = ?4, dat_rom_id = ?5, match_status = ?6, last_scanned_at = ?7,
-                header_size = ?8, headerless_crc32 = ?9, headerless_md5 = ?10, headerless_sha1 = ?11
+                header_size = ?8, headerless_crc32 = ?9, headerless_md5 = ?10, headerless_sha1 = ?11,
+                trailer_size = ?13
          WHERE id = ?12",
         params![
             hashes.size as i64,
@@ -489,7 +490,8 @@ pub fn update_rom_hash(
             headerless.map(|h| &h.digests.crc32),
             headerless.map(|h| &h.digests.md5),
             headerless.map(|h| &h.digests.sha1),
-            rom_id
+            rom_id,
+            headerless.map(|h| h.trailer_size as i64),
         ],
     )?;
     Ok(())
@@ -563,7 +565,7 @@ pub fn get_rom_details(conn: &Connection, rom_id: i64) -> rusqlite::Result<Optio
         "SELECT r.id, r.file_name, r.file_path, r.archive_member, r.system_id, s.name,
                 dg.year, dg.region, dg.name, r.match_status,
                 r.crc32, r.md5, r.sha1, s.emulator_path, s.emulator_args,
-                r.header_size, r.headerless_crc32
+                r.header_size, r.headerless_crc32, r.trailer_size
          FROM roms r
          LEFT JOIN systems s ON s.id = r.system_id
          LEFT JOIN dat_roms dr ON dr.id = r.dat_rom_id
@@ -603,6 +605,7 @@ pub fn get_rom_details(conn: &Connection, rom_id: i64) -> rusqlite::Result<Optio
                 emulator_args: r.get(14)?,
                 header_size: r.get(15)?,
                 headerless_crc32: r.get(16)?,
+                trailer_size: r.get(17)?,
             })
         },
     )

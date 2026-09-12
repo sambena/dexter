@@ -125,6 +125,19 @@ UPDATE roms SET match_status = 'pending'
      OR LOWER(file_name) LIKE '%.swc' OR LOWER(file_name) LIKE '%.fig');
 "#;
 
+const SCHEMA_V6: &str = r#"
+-- Bytes also left off the end for the headerless hashes (NES title tags
+-- appended past the last whole 8 KiB block).
+ALTER TABLE roms ADD COLUMN trailer_size INTEGER;
+
+-- NES dumps hashed under v5 with leftover bytes at the end were hashed
+-- without trimming them, so queue the unmatched ones again.
+UPDATE roms SET match_status = 'pending'
+ WHERE match_status IN ('unmatched', 'error')
+   AND header_size = 16 AND size > 16 AND (size - 16) % 8192 <> 0
+   AND LOWER(file_name) NOT LIKE '%.fds';
+"#;
+
 pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch("PRAGMA foreign_keys = ON;")?;
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -146,6 +159,9 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     }
     if version < 5 {
         conn.execute_batch(&format!("BEGIN; {} PRAGMA user_version = 5; COMMIT;", SCHEMA_V5))?;
+    }
+    if version < 6 {
+        conn.execute_batch(&format!("BEGIN; {} PRAGMA user_version = 6; COMMIT;", SCHEMA_V6))?;
     }
     Ok(())
 }
@@ -182,7 +198,37 @@ mod tests {
         assert_eq!(status("Contra.nes"), "matched");
         assert_eq!(status("Metroid.gba"), "unmatched");
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
+    }
+
+    #[test]
+    fn v6_requeues_unmatched_nes_with_leftover_bytes() {
+        let conn = Connection::open_in_memory().unwrap();
+        for sql in [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5] {
+            conn.execute_batch(sql).unwrap();
+        }
+        conn.execute_batch(
+            "PRAGMA user_version = 5;
+             INSERT INTO roms (file_path, file_name, size, header_size, match_status, last_scanned_at) VALUES
+               ('a', 'tagged.nes', 41104, 16, 'unmatched', ''),
+               ('b', 'clean.nes', 40976, 16, 'unmatched', ''),
+               ('c', 'tagged-but-matched.nes', 41104, 16, 'matched', ''),
+               ('d', 'disk.fds', 131016, 16, 'unmatched', ''),
+               ('e', 'copier.smc', 1049088, 512, 'unmatched', '');",
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+
+        let status = |name: &str| -> String {
+            conn.query_row("SELECT match_status FROM roms WHERE file_name = ?1", [name], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(status("tagged.nes"), "pending");
+        assert_eq!(status("clean.nes"), "unmatched");
+        assert_eq!(status("tagged-but-matched.nes"), "matched");
+        assert_eq!(status("disk.fds"), "unmatched");
+        assert_eq!(status("copier.smc"), "unmatched");
     }
 
     #[test]

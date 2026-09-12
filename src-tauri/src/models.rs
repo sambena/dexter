@@ -82,6 +82,8 @@ pub struct RomDetailsDto {
     /// Bytes of header detected at the start of the file, if any.
     pub header_size: Option<i64>,
     pub headerless_crc32: Option<String>,
+    /// Bytes past the ROM data at the end of the file, also skipped for matching.
+    pub trailer_size: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]

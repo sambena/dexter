@@ -264,12 +264,13 @@ ${rom.file_path}
         {details.header_size != null && (
           <>
             <dt>Header</dt>
-            <dd title="DATs usually hash ROM data without this header, so matching tries both.">
-              {details.header_size} bytes, skipped for matching
+            <dd title="DATs usually hash ROM data without these bytes, so matching tries both.">
+              {details.header_size} bytes
+              {details.trailer_size ? `, plus ${details.trailer_size} trailing bytes,` : ""} skipped for matching
               {details.headerless_crc32 && (
                 <>
                   {" "}
-                  (CRC32 without it: <span className="mono">{details.headerless_crc32}</span>)
+                  (CRC32 without: <span className="mono">{details.headerless_crc32}</span>)
                 </>
               )}
             </dd>

@@ -45,6 +45,7 @@ export interface RomDetailsDto {
   emulator_args: string | null;
   header_size: number | null;
   headerless_crc32: string | null;
+  trailer_size: number | null;
 }
 
 export interface RomFilter {
