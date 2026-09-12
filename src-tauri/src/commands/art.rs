@@ -144,16 +144,24 @@ pub async fn pick_and_set_box_art(rom_id: i64, app: AppHandle, state: State<'_, 
     let Some(picked) = picked else {
         return Err("No file selected".to_string());
     };
-    let src_path = PathBuf::from(picked.to_string());
+    set_box_art_from_file(&app, &state, rom_id, Path::new(&picked.to_string()))
+}
+
+/// Copies an image into the art cache as this ROM's manual box art and
+/// returns it as a data URL.
+pub fn set_box_art_from_file(app: &AppHandle, state: &AppState, rom_id: i64, src_path: &Path) -> Result<String, String> {
+    if !src_path.is_file() {
+        return Err(format!("No image found at {}", src_path.display()));
+    }
     let ext = src_path
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("png")
         .to_string();
 
-    let dir = art_dir(&app)?;
+    let dir = art_dir(app)?;
     let dest = dir.join(format!("rom_{}.{}", rom_id, ext));
-    std::fs::copy(&src_path, &dest).map_err(|e| e.to_string())?;
+    std::fs::copy(src_path, &dest).map_err(|e| e.to_string())?;
 
     {
         let conn = state.db.lock().map_err(|e| e.to_string())?;

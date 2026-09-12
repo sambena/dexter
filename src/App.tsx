@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { LibraryProvider } from "./state/useLibraryStore";
 import { JobProvider } from "./state/useJobStore";
+import { ApiSync } from "./components/Layout/ApiSync";
 import { GlobalProgress } from "./components/Layout/GlobalProgress";
 import { TopBar } from "./components/Layout/TopBar";
 import { TwoPaneLayout } from "./components/Layout/TwoPaneLayout";
@@ -18,6 +19,7 @@ function App() {
     <LibraryProvider>
       <JobProvider>
         <div className="app">
+          <ApiSync />
           <GlobalProgress />
           <TopBar onOpenSettings={() => setSettingsOpen(true)} onOpenTools={() => setToolsOpen(true)} />
           <TwoPaneLayout left={<RomList />} right={<DetailsPanel />} />
