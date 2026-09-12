@@ -96,8 +96,10 @@ pub async fn hash_pending_roms(app: tauri::AppHandle, state: State<'_, AppState>
         match received.outcome {
             Ok(h) => {
                 let dat_rom_id = match received.system_id {
-                    Some(system_id) => repo::find_dat_rom_match(&conn, system_id, &h.crc32, &h.sha1, &h.md5)
-                        .map_err(|e| e.to_string())?,
+                    Some(system_id) => {
+                        let headerless = h.headerless.as_ref().map(|hl| &hl.digests);
+                        repo::match_rom_hashes(&conn, system_id, &h.full, headerless).map_err(|e| e.to_string())?
+                    }
                     None => None,
                 };
                 if dat_rom_id.is_some() {
@@ -105,8 +107,7 @@ pub async fn hash_pending_roms(app: tauri::AppHandle, state: State<'_, AppState>
                 } else {
                     summary.unmatched += 1;
                 }
-                repo::update_rom_hash(&conn, received.rom_id, h.size as i64, &h.crc32, &h.md5, &h.sha1, dat_rom_id)
-                    .map_err(|e| e.to_string())?;
+                repo::update_rom_hash(&conn, received.rom_id, &h, dat_rom_id).map_err(|e| e.to_string())?;
             }
             Err(e) => {
                 repo::mark_rom_hash_error(&conn, received.rom_id).map_err(|e| e.to_string())?;

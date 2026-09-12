@@ -43,6 +43,8 @@ export interface RomDetailsDto {
   sha1: string | null;
   emulator_path: string | null;
   emulator_args: string | null;
+  header_size: number | null;
+  headerless_crc32: string | null;
 }
 
 export interface RomFilter {

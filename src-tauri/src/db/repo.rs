@@ -1,6 +1,7 @@
 use crate::models::{
     DuplicateFileDto, DuplicateGroupDto, RomDetailsDto, RomFilter, RomListItemDto, Settings, SystemDto,
 };
+use crate::scanner::hashing::{Digests, FileHashes};
 use rusqlite::{params, Connection, OptionalExtension};
 
 // ---------- settings ----------
@@ -251,25 +252,34 @@ pub fn remove_dat_source(conn: &mut Connection, dat_source_id: i64) -> rusqlite:
 pub fn rematch_system(conn: &mut Connection, system_id: i64) -> rusqlite::Result<(i64, i64)> {
     struct Hashed {
         id: i64,
-        crc32: String,
-        sha1: String,
-        md5: String,
+        full: Digests,
+        headerless: Option<Digests>,
         was_matched: bool,
     }
 
     let hashed: Vec<Hashed> = {
         let mut stmt = conn.prepare(
-            "SELECT id, crc32, sha1, md5, dat_rom_id FROM roms
+            "SELECT id, crc32, sha1, md5, dat_rom_id, headerless_crc32, headerless_sha1, headerless_md5 FROM roms
              WHERE system_id = ?1 AND crc32 IS NOT NULL
                AND match_status IN ('matched', 'unmatched')",
         )?;
         let rows = stmt.query_map(params![system_id], |r| {
             Ok(Hashed {
                 id: r.get(0)?,
-                crc32: r.get(1)?,
-                sha1: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
-                md5: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                full: Digests {
+                    crc32: r.get(1)?,
+                    sha1: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    md5: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                },
                 was_matched: r.get::<_, Option<i64>>(4)?.is_some(),
+                headerless: match r.get::<_, Option<String>>(5)? {
+                    Some(crc32) => Some(Digests {
+                        crc32,
+                        sha1: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
+                        md5: r.get::<_, Option<String>>(7)?.unwrap_or_default(),
+                    }),
+                    None => None,
+                },
             })
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()?
@@ -279,7 +289,7 @@ pub fn rematch_system(conn: &mut Connection, system_id: i64) -> rusqlite::Result
     let mut now_unmatched = 0i64;
     let tx = conn.transaction()?;
     for rom in &hashed {
-        let dat_rom_id = find_dat_rom_match(&tx, system_id, &rom.crc32, &rom.sha1, &rom.md5)?;
+        let dat_rom_id = match_rom_hashes(&tx, system_id, &rom.full, rom.headerless.as_ref())?;
         let is_matched = dat_rom_id.is_some();
         if is_matched && !rom.was_matched {
             newly_matched += 1;
@@ -351,6 +361,25 @@ pub fn find_dat_rom_match(
         return Ok(Some(m.dat_rom_id));
     }
     Ok(candidates.into_iter().next().map(|c| c.dat_rom_id))
+}
+
+/// Matches a ROM against the system's DATs using the whole file first, then
+/// the data without its header. DATs hash one form or the other (No-Intro's
+/// SNES and headerless NES DATs exclude headers; its headered NES DAT
+/// includes a clean one), so trying both works whichever is imported.
+pub fn match_rom_hashes(
+    conn: &Connection,
+    system_id: i64,
+    full: &Digests,
+    headerless: Option<&Digests>,
+) -> rusqlite::Result<Option<i64>> {
+    if let Some(id) = find_dat_rom_match(conn, system_id, &full.crc32, &full.sha1, &full.md5)? {
+        return Ok(Some(id));
+    }
+    match headerless {
+        Some(h) => find_dat_rom_match(conn, system_id, &h.crc32, &h.sha1, &h.md5),
+        None => Ok(None),
+    }
 }
 
 /// Quick-scan insert for a file (or archive entry) that hasn't been hashed yet.
@@ -438,17 +467,30 @@ pub fn list_pending_roms(conn: &Connection) -> rusqlite::Result<Vec<PendingRom>>
 pub fn update_rom_hash(
     conn: &Connection,
     rom_id: i64,
-    size: i64,
-    crc32: &str,
-    md5: &str,
-    sha1: &str,
+    hashes: &FileHashes,
     dat_rom_id: Option<i64>,
 ) -> rusqlite::Result<()> {
     let match_status = if dat_rom_id.is_some() { "matched" } else { "unmatched" };
     let now = chrono::Utc::now().to_rfc3339();
+    let headerless = hashes.headerless.as_ref();
     conn.execute(
-        "UPDATE roms SET size = ?1, crc32 = ?2, md5 = ?3, sha1 = ?4, dat_rom_id = ?5, match_status = ?6, last_scanned_at = ?7 WHERE id = ?8",
-        params![size, crc32, md5, sha1, dat_rom_id, match_status, now, rom_id],
+        "UPDATE roms SET size = ?1, crc32 = ?2, md5 = ?3, sha1 = ?4, dat_rom_id = ?5, match_status = ?6, last_scanned_at = ?7,
+                header_size = ?8, headerless_crc32 = ?9, headerless_md5 = ?10, headerless_sha1 = ?11
+         WHERE id = ?12",
+        params![
+            hashes.size as i64,
+            hashes.full.crc32,
+            hashes.full.md5,
+            hashes.full.sha1,
+            dat_rom_id,
+            match_status,
+            now,
+            headerless.map(|h| h.header_size as i64),
+            headerless.map(|h| &h.digests.crc32),
+            headerless.map(|h| &h.digests.md5),
+            headerless.map(|h| &h.digests.sha1),
+            rom_id
+        ],
     )?;
     Ok(())
 }
@@ -520,7 +562,8 @@ pub fn get_rom_details(conn: &Connection, rom_id: i64) -> rusqlite::Result<Optio
     conn.query_row(
         "SELECT r.id, r.file_name, r.file_path, r.archive_member, r.system_id, s.name,
                 dg.year, dg.region, dg.name, r.match_status,
-                r.crc32, r.md5, r.sha1, s.emulator_path, s.emulator_args
+                r.crc32, r.md5, r.sha1, s.emulator_path, s.emulator_args,
+                r.header_size, r.headerless_crc32
          FROM roms r
          LEFT JOIN systems s ON s.id = r.system_id
          LEFT JOIN dat_roms dr ON dr.id = r.dat_rom_id
@@ -558,6 +601,8 @@ pub fn get_rom_details(conn: &Connection, rom_id: i64) -> rusqlite::Result<Optio
                 sha1: r.get(12)?,
                 emulator_path: r.get(13)?,
                 emulator_args: r.get(14)?,
+                header_size: r.get(15)?,
+                headerless_crc32: r.get(16)?,
             })
         },
     )

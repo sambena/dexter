@@ -118,8 +118,13 @@ function matchStatusExplanation(details: RomDetailsDto, hasDat: boolean, folderN
       }
       const base =
         "This file's hash didn't match any entry in the imported DAT for this system — it may be a modified/bad dump, a version the DAT doesn't list, or a homebrew/hack.";
-      const hint = folderName ? MULTI_VARIANT_SYSTEM_HINTS[normalizeFolderKey(folderName)] : undefined;
-      return hint ? `${base} ${hint}` : base;
+      const hints = [
+        folderName ? MULTI_VARIANT_SYSTEM_HINTS[normalizeFolderKey(folderName)] : undefined,
+        details.header_size != null
+          ? "The file has a header, and neither the whole file nor the data without it matched. For NES, No-Intro's Headerless DAT is the most reliable, since old dumps often have junk in their headers."
+          : undefined,
+      ].filter(Boolean);
+      return [base, ...hints].join(" ");
     }
     default:
       return null;
@@ -255,6 +260,21 @@ ${rom.file_path}
 
         <dt>CRC32</dt>
         <dd className="mono">{details.crc32 ?? "—"}</dd>
+
+        {details.header_size != null && (
+          <>
+            <dt>Header</dt>
+            <dd title="DATs usually hash ROM data without this header, so matching tries both.">
+              {details.header_size} bytes, skipped for matching
+              {details.headerless_crc32 && (
+                <>
+                  {" "}
+                  (CRC32 without it: <span className="mono">{details.headerless_crc32}</span>)
+                </>
+              )}
+            </dd>
+          </>
+        )}
 
         <dt>MD5</dt>
         <dd className="mono">{details.md5 ?? "—"}</dd>

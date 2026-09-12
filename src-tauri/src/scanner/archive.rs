@@ -31,5 +31,6 @@ pub fn hash_zip_member(zip_path: &Path, entry_name: &str) -> anyhow::Result<File
     let file = File::open(zip_path)?;
     let mut archive = zip::ZipArchive::new(file)?;
     let entry = archive.by_name(entry_name)?;
-    Ok(hash_reader(entry)?)
+    let size = entry.size();
+    Ok(hash_reader(entry, entry_name, Some(size))?)
 }

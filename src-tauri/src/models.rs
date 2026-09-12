@@ -79,6 +79,9 @@ pub struct RomDetailsDto {
     pub sha1: Option<String>,
     pub emulator_path: Option<String>,
     pub emulator_args: Option<String>,
+    /// Bytes of header detected at the start of the file, if any.
+    pub header_size: Option<i64>,
+    pub headerless_crc32: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
