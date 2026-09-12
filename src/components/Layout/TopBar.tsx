@@ -30,8 +30,11 @@ export function TopBar({
   onOpenTools: () => void;
 }) {
   const { settings, refreshRoms, refreshSystems } = useLibrary();
-  const { startJob, updateJob, endJob } = useJob();
+  const { job, startJob, updateJob, endJob } = useJob();
   const [activeJob, setActiveJob] = useState<Job>(null);
+  // Also busy while a job started elsewhere runs (the local API, dexter-cli),
+  // so a second scan or hash can't be started on top of it.
+  const busy = activeJob !== null || job !== null;
   const [lastSummary, setLastSummary] = useState<Summary | null>(null);
   const unlistenRefs = useRef<Array<() => void>>([]);
 
@@ -114,7 +117,7 @@ export function TopBar({
     <header className="top-bar">
       <h1 className="app-title">Dexter</h1>
       <div className="top-bar-status">
-        {!activeJob && lastSummary && (
+        {!busy && lastSummary && (
           <span className="scan-summary">
             {lastSummary.job === "scan" && (
               <>
@@ -140,16 +143,16 @@ export function TopBar({
         )}
       </div>
       <div className="top-bar-actions">
-        <button onClick={handleScan} disabled={activeJob !== null}>
+        <button onClick={handleScan} disabled={busy}>
           {activeJob === "scan" ? "Scanning…" : "Scan Files"}
         </button>
-        <button onClick={handleHash} disabled={activeJob !== null}>
+        <button onClick={handleHash} disabled={busy}>
           {activeJob === "hash" ? "Hashing…" : "Hash & Match"}
         </button>
-        <button onClick={handleDownloadArt} disabled={activeJob !== null}>
+        <button onClick={handleDownloadArt} disabled={busy}>
           {activeJob === "art" ? "Downloading…" : "Download Box Art"}
         </button>
-        <button onClick={onOpenTools} disabled={activeJob !== null}>
+        <button onClick={onOpenTools} disabled={busy}>
           Tools
         </button>
         <button onClick={onOpenSettings}>Settings</button>

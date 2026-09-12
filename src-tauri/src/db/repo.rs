@@ -90,15 +90,6 @@ pub fn set_system_emulator(
     Ok(())
 }
 
-pub fn get_system_folder_name(conn: &Connection, system_id: i64) -> rusqlite::Result<Option<String>> {
-    conn.query_row(
-        "SELECT folder_name FROM systems WHERE id = ?1",
-        params![system_id],
-        |r| r.get(0),
-    )
-    .optional()
-}
-
 pub struct SystemDatSource {
     pub folder_name: String,
     pub dat_url: Option<String>,
