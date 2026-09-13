@@ -24,7 +24,7 @@ export interface RomListItemDto {
   system_id: number | null;
   system_name: string | null;
   display_name: string;
-  match_status: "matched" | "unmatched" | "unverifiable" | "pending" | "error" | string;
+  match_status: "matched" | "identified" | "unmatched" | "unverifiable" | "pending" | "error" | string;
 }
 
 export interface RomDetailsDto {
@@ -57,6 +57,10 @@ export interface RomDetailsDto {
   product_code: string | null;
   /** Named from a DAT game found by title, not verified by hash. */
   identified_by_title: boolean;
+  /** Named after the DAT game its file name says it is; its hash matches no dump of it. */
+  named_from_file_name: boolean;
+  /** The hash match status under match_status, which shows "identified" for recognised titles. */
+  hash_status: string;
   /** The box art was looked up by file name, not a DAT entry: it may be another release. */
   box_art_guessed: boolean;
 }

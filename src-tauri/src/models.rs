@@ -111,6 +111,12 @@ pub struct RomDetailsDto {
     /// The name and region come from a DAT game found by title, not by hash:
     /// the file is identified but not verified.
     pub identified_by_title: bool,
+    /// The name and region come from the DAT game the file's name says it is;
+    /// its hash matches no dump of that game.
+    pub named_from_file_name: bool,
+    /// The hash match status underneath `match_status`, which shows
+    /// "identified" for files recognised from their own title information.
+    pub hash_status: String,
     /// The box art shown was looked up by the file's name, not a DAT entry,
     /// so it may be for another release.
     pub box_art_guessed: bool,

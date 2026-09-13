@@ -1,5 +1,10 @@
 const ITEMS: Array<{ status: string; label: string; hint: string }> = [
   { status: "matched", label: "Matched", hint: "Hash matched a known entry in an imported DAT." },
+  {
+    status: "identified",
+    label: "Identified",
+    hint: "Recognised from its own title information (a Wii U title's files or a disc header) and named from the DAT, but not verified by hash.",
+  },
   { status: "unmatched", label: "Unmatched", hint: "Hashed, but no DAT entry matched — see a ROM's details for why." },
   {
     status: "unverifiable",

@@ -317,6 +317,7 @@ pub fn rematch_system(conn: &mut Connection, system_id: i64) -> rusqlite::Result
     match_track_lists(conn, Some(system_id))?;
     // A re-imported DAT replaced its games, unlinking identified titles.
     identify_titles(conn, Some(system_id))?;
+    name_unmatched_files(conn, Some(system_id))?;
 
     let mut newly_matched = 0i64;
     let mut now_unmatched = 0i64;
@@ -704,9 +705,15 @@ fn display_name(
     }
 }
 
+/// The status the library shows: "identified" for a file recognised from its
+/// own title information (a Wii U title's XML, a disc header) but not
+/// verified by hash; otherwise the hash match status.
+const SHOWN_STATUS: &str = "CASE WHEN r.match_status <> 'matched' AND r.identified_game_id IS NOT NULL
+                                  AND r.title_name IS NOT NULL THEN 'identified' ELSE r.match_status END";
+
 pub fn list_roms(conn: &Connection, filter: &RomFilter) -> rusqlite::Result<Vec<RomListItemDto>> {
-    let mut sql = String::from(
-        "SELECT r.id, r.file_name, r.system_id, s.name, dg.name, r.match_status,
+    let mut sql = format!(
+        "SELECT r.id, r.file_name, r.system_id, s.name, dg.name, {SHOWN_STATUS},
                 r.title_name, r.title_kind, r.title_version
          FROM roms r
          LEFT JOIN systems s ON s.id = r.system_id
@@ -725,7 +732,7 @@ pub fn list_roms(conn: &Connection, filter: &RomFilter) -> rusqlite::Result<Vec<
         args.push(Box::new(system_id));
     }
     if let Some(status) = filter.match_status.as_ref().filter(|s| !s.is_empty() && *s != "all") {
-        sql.push_str(&format!(" AND r.match_status = ?{}", args.len() + 1));
+        sql.push_str(&format!(" AND {} = ?{}", SHOWN_STATUS, args.len() + 1));
         args.push(Box::new(status.clone()));
     }
 
@@ -759,20 +766,23 @@ pub fn list_roms(conn: &Connection, filter: &RomFilter) -> rusqlite::Result<Vec<
 
 pub fn get_rom_details(conn: &Connection, rom_id: i64) -> rusqlite::Result<Option<RomDetailsDto>> {
     let details = conn.query_row(
-        "SELECT r.id, r.file_name, r.file_path, r.archive_member, r.system_id, s.name,
-                dg.year, dg.region, dg.name, r.match_status,
+        &format!(
+            "SELECT r.id, r.file_name, r.file_path, r.archive_member, r.system_id, s.name,
+                dg.year, dg.region, dg.name, {SHOWN_STATUS},
                 r.crc32, r.md5, r.sha1, s.emulator_path, s.emulator_args,
                 r.header_size, r.headerless_crc32, r.trailer_size, s.emulator_core, r.match_note,
                 r.title_id, r.title_version, r.title_kind, r.title_name, r.product_code,
-                dr.id IS NULL AND dg.id IS NOT NULL
+                dr.id IS NULL AND dg.id IS NOT NULL, r.match_status
          FROM roms r
          LEFT JOIN systems s ON s.id = r.system_id
          LEFT JOIN dat_roms dr ON dr.id = r.dat_rom_id
          LEFT JOIN dat_games dg ON dg.id = COALESCE(dr.dat_game_id, r.identified_game_id)
-         WHERE r.id = ?1",
+         WHERE r.id = ?1"
+        ),
         params![rom_id],
         |r| {
             let file_name: String = r.get(1)?;
+            let named_by_dat_without_hash: bool = r.get(25)?;
             let dat_year: Option<String> = r.get(6)?;
             let dat_region: Option<String> = r.get(7)?;
             let dat_name: Option<String> = r.get(8)?;
@@ -781,6 +791,8 @@ pub fn get_rom_details(conn: &Connection, rom_id: i64) -> rusqlite::Result<Optio
             let title_name: Option<String> = r.get(23)?;
             let product_code: Option<String> = r.get(24)?;
 
+            let identified_by_title = named_by_dat_without_hash && title_name.is_some();
+            let named_from_file_name = named_by_dat_without_hash && title_name.is_none();
             let (display_name, year, region, metadata_guessed) = match (dat_name, title_name) {
                 (Some(name), _) => (name, dat_year, dat_region, false),
                 (None, Some(title)) => {
@@ -819,7 +831,9 @@ pub fn get_rom_details(conn: &Connection, rom_id: i64) -> rusqlite::Result<Optio
                 title_version,
                 title_kind,
                 product_code,
-                identified_by_title: r.get(25)?,
+                identified_by_title,
+                named_from_file_name,
+                hash_status: r.get(26)?,
                 box_art_guessed: false,
             })
         },
@@ -893,6 +907,48 @@ pub fn identify_titles(conn: &Connection, system_id: Option<i64>) -> rusqlite::R
         identified += game_id.is_some() as i64;
     }
     Ok(identified)
+}
+
+/// Links unmatched files that have no title information of their own to the
+/// DAT game their file name says they are (dat::naming), and unlinks files
+/// that have since matched. Run wherever identify_titles is, and after
+/// hashing. Returns how many files are named.
+pub fn name_unmatched_files(conn: &Connection, system_id: Option<i64>) -> rusqlite::Result<i64> {
+    let rows: Vec<(i64, i64, String, bool, Option<i64>)> = {
+        let mut stmt = conn.prepare(
+            "SELECT r.id, r.system_id, COALESCE(r.archive_member, r.file_name), dr.id IS NOT NULL, r.identified_game_id
+             FROM roms r
+             LEFT JOIN dat_roms dr ON dr.id = r.dat_rom_id
+             WHERE r.title_name IS NULL AND r.system_id IS NOT NULL AND (?1 IS NULL OR r.system_id = ?1)",
+        )?;
+        let rows = stmt.query_map(params![system_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+
+    let mut games_by_system: HashMap<i64, Vec<(i64, String)>> = HashMap::new();
+    let mut named = 0;
+    for (rom_id, system, file_name, matched, current) in rows {
+        let game_id = if matched {
+            None
+        } else {
+            if !games_by_system.contains_key(&system) {
+                let mut stmt = conn.prepare(
+                    "SELECT dg.id, dg.name FROM dat_games dg
+                     JOIN dat_sources ds ON ds.id = dg.dat_source_id
+                     WHERE ds.system_id = ?1 ORDER BY dg.id",
+                )?;
+                let games = stmt.query_map(params![system], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+                games_by_system.insert(system, games);
+            }
+            let games = &games_by_system[&system];
+            crate::dat::naming::game_for_file_name(&file_name, games.iter().map(|(id, name)| (*id, name.as_str())))
+        };
+        if game_id != current {
+            conn.execute("UPDATE roms SET identified_game_id = ?1 WHERE id = ?2", params![game_id, rom_id])?;
+        }
+        named += game_id.is_some() as i64;
+    }
+    Ok(named)
 }
 
 // ---------- box art ----------
@@ -1452,8 +1508,44 @@ mod tests {
 
         let id: i64 = conn.query_row("SELECT id FROM roms WHERE file_path = 'MARIO KART 8 (UPDATE DATA)'", [], |r| r.get(0)).unwrap();
         let details = get_rom_details(&conn, id).unwrap().unwrap();
-        assert!(details.identified_by_title && !details.metadata_guessed);
+        assert!(details.identified_by_title && !details.named_from_file_name && !details.metadata_guessed);
         assert_eq!((details.title_kind.as_deref(), details.title_version), (Some("update"), Some(64)));
-        assert_eq!(details.match_status, "unverifiable");
+        assert_eq!((details.match_status.as_str(), details.hash_status.as_str()), ("identified", "unverifiable"));
+        let identified = list_roms(&conn, &RomFilter { match_status: Some("identified".into()), ..Default::default() }).unwrap();
+        assert_eq!(identified.len(), 3);
+    }
+
+    #[test]
+    fn unmatched_files_are_named_from_their_file_names() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::schema::migrate(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO systems (id, name, folder_name) VALUES (1, 'NES', 'NES');
+             INSERT INTO dat_sources (id, system_id, file_name, imported_at) VALUES (1, 1, 'NES.dat', '');
+             INSERT INTO dat_games (id, dat_source_id, name) VALUES (10, 1, 'Goonies (Japan)');
+             INSERT INTO dat_roms (id, dat_game_id, name) VALUES (100, 10, 'Goonies (Japan).nes');",
+        )
+        .unwrap();
+        for path in ["Goonies, The.nes", "Pokemon Red Advanced.nes"] {
+            conn.execute(
+                "INSERT INTO roms (system_id, file_path, file_name, match_status, last_scanned_at) VALUES (1, ?1, ?1, 'unmatched', '')",
+                params![path],
+            )
+            .unwrap();
+        }
+
+        assert_eq!(name_unmatched_files(&conn, None).unwrap(), 1);
+        let roms = list_roms(&conn, &RomFilter::default()).unwrap();
+        let goonies = roms.iter().find(|r| r.file_name == "Goonies, The.nes").unwrap();
+        assert_eq!((goonies.display_name.as_str(), goonies.match_status.as_str()), ("Goonies (Japan)", "unmatched"));
+        let details = get_rom_details(&conn, goonies.id).unwrap().unwrap();
+        assert!(details.named_from_file_name && !details.identified_by_title);
+
+        // Once the file matches, the name from its file name is dropped.
+        let dat_rom: i64 = conn.query_row("SELECT id FROM dat_roms", [], |r| r.get(0)).unwrap();
+        conn.execute("UPDATE roms SET dat_rom_id = ?1, match_status = 'matched' WHERE id = ?2", params![dat_rom, goonies.id]).unwrap();
+        assert_eq!(name_unmatched_files(&conn, None).unwrap(), 0);
+        let stored: Option<i64> = conn.query_row("SELECT identified_game_id FROM roms WHERE id = ?1", params![goonies.id], |r| r.get(0)).unwrap();
+        assert_eq!(stored, None);
     }
 }

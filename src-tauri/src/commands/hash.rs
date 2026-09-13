@@ -107,6 +107,11 @@ pub async fn hash_pending_roms(app: tauri::AppHandle, state: State<'_, AppState>
     let total = pending.len();
     let mut summary = ScanSummary::default();
     if total == 0 {
+        // Names from file names still refresh, e.g. after a DAT was added.
+        {
+            let conn = state.db.lock().map_err(|e| e.to_string())?;
+            repo::name_unmatched_files(&conn, None).map_err(|e| e.to_string())?;
+        }
         let _ = app.emit("hash://done", summary.clone());
         return Ok(summary);
     }
@@ -208,6 +213,7 @@ pub async fn hash_pending_roms(app: tauri::AppHandle, state: State<'_, AppState>
         let sheets = repo::match_track_lists(&conn, None).map_err(|e| e.to_string())?;
         summary.matched += sheets;
         summary.unmatched = (summary.unmatched - sheets).max(0);
+        repo::name_unmatched_files(&conn, None).map_err(|e| e.to_string())?;
     }
 
     let _ = app.emit("hash://done", summary.clone());

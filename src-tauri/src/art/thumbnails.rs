@@ -277,7 +277,10 @@ fn guessed_match<'a>(name: &str, listing: &'a [String]) -> Option<&'a str> {
     best_of(name, longer.into_iter())
 }
 
-fn best_of<'a>(game_name: &str, candidates: impl Iterator<Item = &'a String>) -> Option<&'a str> {
+/// Of names already known to share `game_name`'s title, the one that best
+/// stands in for it: sharing a region (else USA or World), never a beta,
+/// demo or similar the name doesn't ask for, and with the fewest extra tags.
+pub(crate) fn best_of<'a>(game_name: &str, candidates: impl Iterator<Item = &'a String>) -> Option<&'a str> {
     if title_of(game_name).trim().is_empty() {
         return None;
     }

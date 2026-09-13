@@ -146,6 +146,7 @@ pub async fn scan_library(app: tauri::AppHandle, state: State<'_, AppState>) -> 
             if let Ok(system_id) = repo::get_or_create_system_by_folder(&conn, &folder.folder_name) {
                 summary.removed += repo::prune_system_unseen(&conn, system_id).map_err(|e| e.to_string())?;
                 repo::identify_titles(&conn, Some(system_id)).map_err(|e| e.to_string())?;
+                repo::name_unmatched_files(&conn, Some(system_id)).map_err(|e| e.to_string())?;
             }
         }
     }

@@ -13,7 +13,7 @@ function BoxArt({ details }: { details: RomDetailsDto }) {
   const [boxArt, setBoxArt] = useState<string | null>(null);
   const [guessed, setGuessed] = useState(details.box_art_guessed);
   const [knownSource, setKnownSource] = useState(false);
-  const named = details.match_status === "matched" || details.identified_by_title;
+  const named = details.match_status === "matched" || details.identified_by_title || details.named_from_file_name;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { startJob, endJob } = useJob();
@@ -172,6 +172,10 @@ function matchStatusExplanation(details: RomDetailsDto, hasDat: boolean, folderN
       return matchNoteExplanation(details);
     case "pending":
       return "Found by Scan Files but not hashed yet — run Hash & Match.";
+    case "identified":
+      if (details.hash_status === "unmatched")
+        return "Identified from its disc header as this game, but the image doesn't match any Redump dump of it. It may be scrubbed, patched or a bad dump.";
+      return matchStatusExplanation({ ...details, match_status: details.hash_status }, hasDat, folderName);
     case "unverifiable":
       if (details.title_kind === "update" || details.title_kind === "dlc")
         return `This is ${details.title_kind === "update" ? "an update" : "DLC"}, not a game you can start on its own. To use it, install it into the emulator (in Cemu: File → Install game title, update or DLC), then play the game. Like any extracted title folder, it can't be verified by hash.`;
@@ -192,8 +196,9 @@ function matchStatusExplanation(details: RomDetailsDto, hasDat: boolean, folderN
       if (!hasDat) {
         return "No DAT has been imported for this system yet, so there's nothing to match against. Import or fetch one in Settings, then re-run Hash & Match.";
       }
-      const base =
-        "This file's hash didn't match any entry in the imported DAT for this system — it may be a modified/bad dump, a version the DAT doesn't list, or a homebrew/hack.";
+      const base = details.named_from_file_name
+        ? "Its file name says it's this game, but its hash doesn't match any dump of it in the DAT: it's likely a modified or bad copy, or a hack using the game's name. A verified copy of the game can replace it."
+        : "This file's hash didn't match any entry in the imported DAT for this system — it may be a modified/bad dump, a version the DAT doesn't list, or a homebrew/hack.";
       const hints = [
         goodToolsExplanation(details.archive_member ?? details.file_name),
         folderName ? MULTI_VARIANT_SYSTEM_HINTS[normalizeFolderKey(folderName)] : undefined,
@@ -299,6 +304,11 @@ ${rom.file_path}
               Identified by title, not verified
             </p>
           )}
+          {details.named_from_file_name && (
+            <p className="guessed-note" title="Named after the DAT game with this file's title and region. The file doesn't match any dump of it.">
+              Named from file name, not verified
+            </p>
+          )}
         </div>
       </div>
       <dl>
@@ -340,7 +350,9 @@ ${rom.file_path}
 
         <dt>Match status</dt>
         <dd>
-          <span className={`match-dot ${details.match_status}`} /> {details.match_status}
+          <span className={`match-dot ${details.match_status}`} />{" "}
+          {({ unverifiable: "can't verify", pending: "not hashed" } as Record<string, string>)[details.match_status] ??
+            details.match_status}
           {(() => {
             const system = systems.find((s) => s.id === details.system_id);
             const explanation = matchStatusExplanation(details, !!system?.has_dat, system?.folder_name);
