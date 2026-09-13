@@ -40,7 +40,9 @@ Built with [Tauri 2](https://tauri.app/) (Rust) and React + TypeScript.
 
 ## Installing
 
-Build the installer (see below), then run `Dexter_<version>_x64-setup.exe` from `src-tauri\target\release\bundle\nsis\`. It installs for the current user and adds Dexter to the Start menu. An `.msi` is built alongside it in `bundle\msi\`.
+Download `Dexter_<version>_x64-setup.exe` from [Releases](https://github.com/sambena/rom-manager/releases) and run it. It installs for the current user and adds Dexter to the Start menu. Each release also has an `.msi`, a portable `.exe` that runs without installing, and `dexter-cli`.
+
+To install a build of your own, run the installer from `src-tauri\target\release\bundle\nsis\` after building (see below).
 
 Dexter needs the WebView2 runtime, which is already part of Windows 10 and 11.
 
