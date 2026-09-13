@@ -11,7 +11,9 @@ function outerArchivePath(filePath: string, archiveMember: string): string {
 
 function BoxArt({ details }: { details: RomDetailsDto }) {
   const [boxArt, setBoxArt] = useState<string | null>(null);
+  const [guessed, setGuessed] = useState(details.box_art_guessed);
   const [knownSource, setKnownSource] = useState(false);
+  const named = details.match_status === "matched" || details.identified_by_title;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { startJob, endJob } = useJob();
@@ -19,13 +21,14 @@ function BoxArt({ details }: { details: RomDetailsDto }) {
   useEffect(() => {
     setBoxArt(null);
     setError(null);
+    setGuessed(details.box_art_guessed);
     api.getBoxArt(details.id).then(setBoxArt);
     if (details.system_name) {
       api.hasKnownBoxArtSource(details.system_name).then(setKnownSource);
     } else {
       setKnownSource(false);
     }
-  }, [details.id, details.system_name]);
+  }, [details.id, details.system_name, details.box_art_guessed]);
 
   async function fetchArt() {
     setBusy(true);
@@ -33,6 +36,7 @@ function BoxArt({ details }: { details: RomDetailsDto }) {
     startJob("Downloading box art");
     try {
       setBoxArt(await api.fetchBoxArt(details.id));
+      setGuessed(!named);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -47,6 +51,7 @@ function BoxArt({ details }: { details: RomDetailsDto }) {
     startJob("Setting box art");
     try {
       setBoxArt(await api.pickAndSetBoxArt(details.id));
+      setGuessed(false);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -62,15 +67,20 @@ function BoxArt({ details }: { details: RomDetailsDto }) {
       ) : (
         <div className="box-art placeholder">No box art</div>
       )}
+      {boxArt && guessed && (
+        <p className="hint box-art-guessed">
+          Guessed from the file name, since no DAT entry names this file. It may show a different release.
+        </p>
+      )}
       <div className="box-art-actions">
         <button
           onClick={fetchArt}
-          disabled={busy || !(details.match_status === "matched" || details.identified_by_title) || !knownSource}
+          disabled={busy || !knownSource}
           title={
-            !(details.match_status === "matched" || details.identified_by_title)
-              ? "This ROM isn't matched to a DAT entry yet — run Hash & Match, making sure a DAT is imported for this system, then try again."
-              : !knownSource
-                ? "No known box art source for this system yet."
+            !knownSource
+              ? "No known box art source for this system yet."
+              : !named
+                ? "No DAT entry names this file, so box art is looked up by its file name and may show a different release."
                 : undefined
           }
         >

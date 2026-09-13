@@ -239,17 +239,65 @@ fn disqualifies(tag: &str) -> bool {
 /// Languages and revisions don't change the box, so they barely count.
 fn best_match<'a>(game_name: &str, listing: &'a [String]) -> Option<&'a str> {
     let title = comparable(&title_of(game_name));
+    best_of(game_name, listing.iter().filter(|candidate| comparable(&title_of(candidate)) == title))
+}
+
+/// Titles as file names tend to write them: "The Legend of Zelda" for
+/// No-Intro's "Legend of Zelda, The", colons dropped, and so on.
+fn loose_title(name: &str) -> String {
+    let title = title_of(name).to_lowercase();
+    title
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty() && *w != "the")
+        .collect()
+}
+
+/// Like best_match, for a title taken from a file or folder name rather than
+/// a DAT. Titles are compared loosely, and failing that a longer title that
+/// ends with this one is accepted when there's only one, which finds
+/// "Disney-Pixar Cars 3 - Driven to Win" from "Cars 3 Driven to Win".
+fn guessed_match<'a>(name: &str, listing: &'a [String]) -> Option<&'a str> {
+    const MIN_SUFFIX_LEN: usize = 10;
+    let title = loose_title(name);
     if title.is_empty() {
+        return None;
+    }
+    let same: Vec<&String> = listing.iter().filter(|c| loose_title(c) == title).collect();
+    if !same.is_empty() {
+        return best_of(name, same.into_iter());
+    }
+    if title.len() < MIN_SUFFIX_LEN {
+        return None;
+    }
+    let longer: Vec<&String> = listing.iter().filter(|c| loose_title(c).ends_with(&title)).collect();
+    let first = loose_title(longer.first()?);
+    if longer.iter().any(|c| loose_title(c) != first) {
+        return None;
+    }
+    best_of(name, longer.into_iter())
+}
+
+fn best_of<'a>(game_name: &str, candidates: impl Iterator<Item = &'a String>) -> Option<&'a str> {
+    if title_of(game_name).trim().is_empty() {
         return None;
     }
     let wanted_tags = tags_of(game_name);
     let wanted_regions: Vec<&str> = wanted_tags.iter().filter_map(|t| regions_in(t)).flatten().collect();
 
-    listing
-        .iter()
-        .filter(|candidate| comparable(&title_of(candidate)) == title)
+    candidates
         .filter_map(|candidate| {
-            let mut score = 0i32;
+            // With no region to go by, the library's likeliest one.
+            let mut score = if wanted_regions.is_empty()
+                && tags_of(candidate)
+                    .iter()
+                    .filter_map(|t| regions_in(t))
+                    .flatten()
+                    .any(|r| r == "USA" || r == "World")
+            {
+                50
+            } else {
+                0
+            };
             for tag in tags_of(candidate) {
                 if wanted_tags.contains(&tag) {
                     continue;
@@ -332,6 +380,31 @@ pub fn fetch_box_art(
     anyhow::bail!("No box art found for \"{}\"", game_name)
 }
 
+/// Box art for a file no DAT names, looked up by the title and region read
+/// from its file or folder name. The result is a guess: it may be another
+/// release of the game, or occasionally another game.
+pub fn guess_box_art(
+    client: &reqwest::blocking::Client,
+    index: &mut ThumbnailIndex,
+    folder_name: &str,
+    title: &str,
+    region: Option<&str>,
+) -> anyhow::Result<Vec<u8>> {
+    let repo = thumbnails_repo(folder_name)
+        .ok_or_else(|| anyhow::anyhow!("No known box art source for system \"{}\".", folder_name))?;
+    let title = title.replace(" (Update)", "").replace(" (DLC)", "");
+    let name = match region {
+        Some(region) => format!("{} ({})", title_of(&title).trim(), region),
+        None => title_of(&title).trim().to_string(),
+    };
+    let listing = index
+        .listing(client, repo)
+        .ok_or_else(|| anyhow::anyhow!("Couldn't list the box art for \"{}\"", folder_name))?;
+    let not_found = || anyhow::anyhow!("No box art found for \"{}\"", name);
+    let image = guessed_match(&name, listing).map(str::to_string).ok_or_else(not_found)?;
+    download(client, repo, &image)?.ok_or_else(not_found)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -399,6 +472,31 @@ mod tests {
         );
         // Only a demo exists: no box rather than the wrong one.
         assert_eq!(best_match("Some Game (USA)", &names(&["Some Game (USA) (Demo)"])), None);
+    }
+
+    #[test]
+    fn titles_from_file_names_are_matched_loosely() {
+        let listing = names(&[
+            "Legend of Zelda, The - Link's Awakening DX (USA, Europe) (Rev 2) (SGB Enhanced)",
+            "Legend of Zelda, The - Link's Awakening DX (Germany) (SGB Enhanced)",
+            "Goonies II, The (USA)",
+            "Goonies (Japan)",
+            "Disney-Pixar Cars 3 - Driven to Win (Europe) (En,Fr,De,Es,It,Nl,Pl,Ru)",
+            "Disney-Pixar Cars 3 - Driven to Win (USA) (En,Fr,Es,Pt)",
+            "Super Pang (USA)",
+        ]);
+        assert_eq!(
+            guessed_match("The Legend of Zelda - Link's Awakening DX", &listing),
+            Some("Legend of Zelda, The - Link's Awakening DX (USA, Europe) (Rev 2) (SGB Enhanced)")
+        );
+        assert_eq!(guessed_match("Goonies, The (Japan)", &listing), Some("Goonies (Japan)"));
+        assert_eq!(
+            guessed_match("Cars 3 Driven to Win", &listing),
+            Some("Disney-Pixar Cars 3 - Driven to Win (USA) (En,Fr,Es,Pt)")
+        );
+        // Too short to trust a longer title that merely ends with it.
+        assert_eq!(guessed_match("Pang (USA)", &listing), None);
+        assert_eq!(guessed_match("Pokemon Red Advanced", &listing), None);
     }
 
     #[test]

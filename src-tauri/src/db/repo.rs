@@ -758,7 +758,7 @@ pub fn list_roms(conn: &Connection, filter: &RomFilter) -> rusqlite::Result<Vec<
 }
 
 pub fn get_rom_details(conn: &Connection, rom_id: i64) -> rusqlite::Result<Option<RomDetailsDto>> {
-    conn.query_row(
+    let details = conn.query_row(
         "SELECT r.id, r.file_name, r.file_path, r.archive_member, r.system_id, s.name,
                 dg.year, dg.region, dg.name, r.match_status,
                 r.crc32, r.md5, r.sha1, s.emulator_path, s.emulator_args,
@@ -820,10 +820,14 @@ pub fn get_rom_details(conn: &Connection, rom_id: i64) -> rusqlite::Result<Optio
                 title_kind,
                 product_code,
                 identified_by_title: r.get(25)?,
+                box_art_guessed: false,
             })
         },
     )
-    .optional()
+    .optional()?;
+    let Some(mut details) = details else { return Ok(None) };
+    details.box_art_guessed = get_box_art(conn, rom_id)?.is_some_and(|(_, source)| source == GUESSED_ART_SOURCE);
+    Ok(Some(details))
 }
 
 /// Stores what a title folder's XML says about it (or clears it, if its
@@ -919,29 +923,31 @@ pub fn get_rom_art_context(conn: &Connection, rom_id: i64) -> rusqlite::Result<O
     .optional()
 }
 
-/// Rom-level box art (manual override) takes priority; otherwise falls back to
-/// whatever's stored for the matched DAT game, if any.
-pub fn get_box_art_path(conn: &Connection, rom_id: i64) -> rusqlite::Result<Option<String>> {
-    if let Some(path) = conn
-        .query_row(
-            "SELECT file_path FROM box_art WHERE rom_id = ?1",
-            params![rom_id],
-            |r| r.get(0),
-        )
-        .optional()?
-    {
-        return Ok(Some(path));
-    }
+/// The box_art source for art looked up by a file's name rather than a DAT
+/// entry, which may show another release.
+pub const GUESSED_ART_SOURCE: &str = "guessed";
+
+/// Art the user chose for a ROM comes first, then the art of the DAT game it
+/// matched, then art guessed from its file name (which a later match makes
+/// obsolete).
+pub fn get_box_art(conn: &Connection, rom_id: i64) -> rusqlite::Result<Option<(String, String)>> {
     conn.query_row(
-        "SELECT ba.file_path
+        "SELECT ba.file_path, ba.source
          FROM roms r
          LEFT JOIN dat_roms dr ON dr.id = r.dat_rom_id
-         JOIN box_art ba ON ba.dat_game_id = COALESCE(dr.dat_game_id, r.identified_game_id)
-         WHERE r.id = ?1",
-        params![rom_id],
-        |r| r.get(0),
+         JOIN box_art ba ON ba.rom_id = r.id
+                         OR ba.dat_game_id = COALESCE(dr.dat_game_id, r.identified_game_id)
+         WHERE r.id = ?1
+         ORDER BY CASE WHEN ba.rom_id IS NULL THEN 1 WHEN ba.source = ?2 THEN 2 ELSE 0 END
+         LIMIT 1",
+        params![rom_id, GUESSED_ART_SOURCE],
+        |r| Ok((r.get(0)?, r.get(1)?)),
     )
     .optional()
+}
+
+pub fn get_box_art_path(conn: &Connection, rom_id: i64) -> rusqlite::Result<Option<String>> {
+    Ok(get_box_art(conn, rom_id)?.map(|(path, _)| path))
 }
 
 pub fn set_rom_box_art(conn: &Connection, rom_id: i64, file_path: &str, source: &str) -> rusqlite::Result<()> {
@@ -989,6 +995,97 @@ pub fn list_matched_games_missing_art(conn: &Connection) -> rusqlite::Result<Vec
         })
     })?;
     rows.collect()
+}
+
+pub struct RomArtTarget {
+    pub rom_id: i64,
+    pub folder_name: String,
+    /// Read from the file or folder name, as the library displays it.
+    pub title: String,
+    pub region: Option<String>,
+}
+
+/// Files no DAT game names, with no box art of their own yet: the working set
+/// for guessing art from file names.
+pub fn list_unnamed_roms_missing_art(conn: &Connection) -> rusqlite::Result<Vec<RomArtTarget>> {
+    let mut stmt = conn.prepare(
+        "SELECT r.id, s.folder_name, r.file_name, r.archive_member, r.title_name, r.title_kind,
+                r.title_version, r.product_code
+         FROM roms r
+         JOIN systems s ON s.id = r.system_id
+         LEFT JOIN dat_roms dr ON dr.id = r.dat_rom_id
+         WHERE dr.id IS NULL AND r.identified_game_id IS NULL
+           AND NOT EXISTS (SELECT 1 FROM box_art ba WHERE ba.rom_id = r.id)
+         ORDER BY r.id",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        let file_name: String = r.get(2)?;
+        let archive_member: Option<String> = r.get(3)?;
+        let title_name: Option<String> = r.get(4)?;
+        let product_code: Option<String> = r.get(7)?;
+        Ok(unnamed_rom_target(
+            r.get(0)?,
+            r.get(1)?,
+            archive_member.as_deref().unwrap_or(&file_name),
+            title_name,
+            r.get(5)?,
+            r.get(6)?,
+            product_code.as_deref(),
+        ))
+    })?;
+    rows.collect()
+}
+
+pub fn get_rom_art_target(conn: &Connection, rom_id: i64) -> rusqlite::Result<Option<RomArtTarget>> {
+    conn.query_row(
+        "SELECT r.id, s.folder_name, r.file_name, r.archive_member, r.title_name, r.title_kind,
+                r.title_version, r.product_code
+         FROM roms r
+         JOIN systems s ON s.id = r.system_id
+         WHERE r.id = ?1",
+        params![rom_id],
+        |r| {
+            let file_name: String = r.get(2)?;
+            let archive_member: Option<String> = r.get(3)?;
+            let product_code: Option<String> = r.get(7)?;
+            Ok(unnamed_rom_target(
+                r.get(0)?,
+                r.get(1)?,
+                archive_member.as_deref().unwrap_or(&file_name),
+                r.get(4)?,
+                r.get(5)?,
+                r.get(6)?,
+                product_code.as_deref(),
+            ))
+        },
+    )
+    .optional()
+}
+
+/// A title folder's own name for itself beats its folder name; otherwise the
+/// title and region come from the file name, as the library shows them.
+fn unnamed_rom_target(
+    rom_id: i64,
+    folder_name: String,
+    file_name: &str,
+    title_name: Option<String>,
+    title_kind: Option<String>,
+    title_version: Option<i64>,
+    product_code: Option<&str>,
+) -> RomArtTarget {
+    let (title, region) = match title_name {
+        Some(title) => (
+            display_name(None, Some(title), title_kind, title_version, file_name),
+            product_code
+                .and_then(crate::scanner::wiiu::region_for_product_code)
+                .map(str::to_string),
+        ),
+        None => {
+            let parsed = crate::dat::filename::parse_filename_metadata(file_name);
+            (parsed.title, parsed.region)
+        }
+    };
+    RomArtTarget { rom_id, folder_name, title, region }
 }
 
 // ---------- maintenance ----------

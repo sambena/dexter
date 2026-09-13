@@ -57,6 +57,8 @@ export interface RomDetailsDto {
   product_code: string | null;
   /** Named from a DAT game found by title, not verified by hash. */
   identified_by_title: boolean;
+  /** The box art was looked up by file name, not a DAT entry: it may be another release. */
+  box_art_guessed: boolean;
 }
 
 export interface RomFilter {
@@ -87,6 +89,8 @@ export interface ArtFetchSummary {
   attempted: number;
   downloaded: number;
   not_found: number;
+  /** Of downloaded, images for unmatched files looked up by file name. */
+  guessed: number;
   errors: string[];
 }
 

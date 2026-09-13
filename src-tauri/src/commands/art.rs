@@ -60,17 +60,21 @@ fn fetch_box_art_blocking(rom_id: i64, app: &AppHandle) -> Result<String, String
         repo::get_rom_art_context(&conn, rom_id).map_err(|e| e.to_string())?
     };
     let ctx = ctx.ok_or_else(|| "ROM not found".to_string())?;
+    let client = thumbnails::http_client().map_err(|e| e.to_string())?;
+    let mut index = thumbnails::ThumbnailIndex::default();
     let (dat_game_id, game_name, folder_name) = match (ctx.dat_game_id, ctx.dat_game_name, ctx.system_folder_name) {
         (Some(id), Some(name), Some(folder)) => (id, name, folder),
         _ => {
-            return Err(
-                "This ROM isn't matched to a DAT entry, so there's no known title to look up box art for. Use \"Add Box Art\" instead.".to_string(),
-            )
+            let target = {
+                let conn = state.db.lock().map_err(|e| e.to_string())?;
+                repo::get_rom_art_target(&conn, rom_id).map_err(|e| e.to_string())?
+            };
+            let target = target.ok_or_else(|| "This file isn't in a system folder, so there's no art source for it.".to_string())?;
+            let file_path = guess_art(app, &state, &client, &mut index, &target)?;
+            return to_data_url(&file_path);
         }
     };
 
-    let client = thumbnails::http_client().map_err(|e| e.to_string())?;
-    let mut index = thumbnails::ThumbnailIndex::default();
     let bytes =
         thumbnails::fetch_box_art(&client, &mut index, &folder_name, &game_name).map_err(|e| e.to_string())?;
 
@@ -87,9 +91,29 @@ fn fetch_box_art_blocking(rom_id: i64, app: &AppHandle) -> Result<String, String
     to_data_url(&file_path)
 }
 
+/// Looks up art for a file no DAT names, by its file name, and stores it as
+/// that file's own art marked as guessed.
+fn guess_art(
+    app: &AppHandle,
+    state: &AppState,
+    client: &reqwest::blocking::Client,
+    index: &mut thumbnails::ThumbnailIndex,
+    target: &repo::RomArtTarget,
+) -> Result<PathBuf, String> {
+    let bytes = thumbnails::guess_box_art(client, index, &target.folder_name, &target.title, target.region.as_deref())
+        .map_err(|e| e.to_string())?;
+    let file_path = art_dir(app)?.join(format!("rom_{}.png", target.rom_id));
+    std::fs::write(&file_path, &bytes).map_err(|e| e.to_string())?;
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    repo::set_rom_box_art(&conn, target.rom_id, &file_path.to_string_lossy(), repo::GUESSED_ART_SOURCE)
+        .map_err(|e| e.to_string())?;
+    Ok(file_path)
+}
+
 /// Downloads box art for every matched game in the library that doesn't have any
-/// yet. Shares the same cancel flag as scan_library/hash_pending_roms, so the
-/// existing Stop button works here too.
+/// yet, then guesses it by file name for files no DAT names. Shares the same
+/// cancel flag as scan_library/hash_pending_roms, so the existing Stop button
+/// works here too.
 #[tauri::command]
 pub async fn fetch_all_box_art(app: AppHandle) -> Result<ArtFetchSummary, String> {
     // reqwest's blocking client panics if it's used or dropped on an async
@@ -101,13 +125,18 @@ pub async fn fetch_all_box_art(app: AppHandle) -> Result<ArtFetchSummary, String
 
 fn fetch_all_box_art_blocking(app: &AppHandle) -> Result<ArtFetchSummary, String> {
     let state = app.state::<AppState>();
-    let targets = {
+    let (targets, unnamed) = {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
-        repo::list_matched_games_missing_art(&conn).map_err(|e| e.to_string())?
+        let unnamed = repo::list_unnamed_roms_missing_art(&conn).map_err(|e| e.to_string())?;
+        (repo::list_matched_games_missing_art(&conn).map_err(|e| e.to_string())?, unnamed)
     };
+    let unnamed: Vec<_> = unnamed
+        .into_iter()
+        .filter(|t| thumbnails::has_known_thumbnail_source(&t.folder_name))
+        .collect();
 
     state.cancel_flag.store(false, Ordering::SeqCst);
-    let total = targets.len();
+    let total = targets.len() + unnamed.len();
     let mut summary = ArtFetchSummary::default();
     let dir = art_dir(app)?;
     let client = thumbnails::http_client().map_err(|e| e.to_string())?;
@@ -134,6 +163,27 @@ fn fetch_all_box_art_blocking(app: &AppHandle) -> Result<ArtFetchSummary, String
             Err(e) => {
                 summary.not_found += 1;
                 summary.errors.push(format!("{}: {}", target.game_name, e));
+            }
+        }
+        summary.attempted += 1;
+    }
+
+    for (i, target) in unnamed.iter().enumerate() {
+        if state.cancel_flag.load(Ordering::SeqCst) {
+            break;
+        }
+        let _ = app.emit(
+            "art://progress",
+            ScanProgress { current: targets.len() + i + 1, total, current_file: target.title.clone() },
+        );
+        match guess_art(app, &state, &client, &mut index, target) {
+            Ok(_) => {
+                summary.downloaded += 1;
+                summary.guessed += 1;
+            }
+            Err(e) => {
+                summary.not_found += 1;
+                summary.errors.push(format!("{}: {}", target.title, e));
             }
         }
         summary.attempted += 1;

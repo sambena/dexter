@@ -20,7 +20,7 @@ const emptyScanSummary: ScanSummary = {
   removed: 0,
   errors: [],
 };
-const emptyArtSummary: ArtFetchSummary = { attempted: 0, downloaded: 0, not_found: 0, errors: [] };
+const emptyArtSummary: ArtFetchSummary = { attempted: 0, downloaded: 0, not_found: 0, guessed: 0, errors: [] };
 
 export function TopBar({
   onOpenSettings,
@@ -135,7 +135,8 @@ export function TopBar({
             )}
             {lastSummary.job === "art" && (
               <>
-                Checked {lastSummary.summary.attempted} games · {lastSummary.summary.downloaded} downloaded ·{" "}
+                Checked {lastSummary.summary.attempted} games · {lastSummary.summary.downloaded} downloaded
+                {lastSummary.summary.guessed > 0 ? ` (${lastSummary.summary.guessed} guessed by file name)` : ""} ·{" "}
                 {lastSummary.summary.not_found} not found
               </>
             )}

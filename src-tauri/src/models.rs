@@ -111,6 +111,9 @@ pub struct RomDetailsDto {
     /// The name and region come from a DAT game found by title, not by hash:
     /// the file is identified but not verified.
     pub identified_by_title: bool,
+    /// The box art shown was looked up by the file's name, not a DAT entry,
+    /// so it may be for another release.
+    pub box_art_guessed: bool,
 }
 
 /// One way to run a system, as offered in the emulator dropdown.
@@ -216,6 +219,9 @@ pub struct ArtFetchSummary {
     pub attempted: i64,
     pub downloaded: i64,
     pub not_found: i64,
+    /// Of `downloaded`, images for unmatched files looked up by file name.
+    #[serde(default)]
+    pub guessed: i64,
     pub errors: Vec<String>,
 }
 
