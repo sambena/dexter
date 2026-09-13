@@ -225,6 +225,21 @@ pub struct ArtFetchSummary {
     pub errors: Vec<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct RetroArchExportSummary {
+    pub playlists_dir: String,
+    /// "Playlist name: N games" for each playlist written.
+    pub playlists: Vec<String>,
+    pub games: i64,
+    /// "System: reason" for systems left out.
+    pub skipped_systems: Vec<String>,
+    pub thumbnails_copied: i64,
+    /// Already in RetroArch's thumbnails folder from an earlier export.
+    pub thumbnails_unchanged: i64,
+    pub without_art: i64,
+    pub errors: Vec<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DuplicateFileDto {
     pub id: i64,

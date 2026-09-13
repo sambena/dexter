@@ -139,6 +139,18 @@ export interface DuplicateGroupDto {
   verified_count: number;
 }
 
+export interface RetroArchExportSummary {
+  playlists_dir: string;
+  /** "Playlist name: N games" for each playlist written. */
+  playlists: string[];
+  games: number;
+  skipped_systems: string[];
+  thumbnails_copied: number;
+  thumbnails_unchanged: number;
+  without_art: number;
+  errors: string[];
+}
+
 export interface RenamePlanEntryDto {
   rom_id: number;
   current_name: string;

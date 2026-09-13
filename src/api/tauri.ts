@@ -7,6 +7,7 @@ import type {
   DuplicateGroupDto,
   MaintenanceSummary,
   RenamePlanEntryDto,
+  RetroArchExportSummary,
   RomDetailsDto,
   RomFilter,
   RomListItemDto,
@@ -33,6 +34,7 @@ export const api = {
   setSystemEmulatorChoice: (systemId: number, choice: EmulatorChoice) =>
     invoke<void>("set_system_emulator_choice", { systemId, choice }),
   autoConfigureEmulators: () => invoke<AutoConfigureSummary>("auto_configure_emulators"),
+  exportRetroArchPlaylists: () => invoke<RetroArchExportSummary>("export_retroarch_playlists"),
 
   pickDatFile: () => invoke<string | null>("pick_dat_file"),
   importDatFile: (systemId: number, filePath: string) =>

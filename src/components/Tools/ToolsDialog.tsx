@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { DuplicatesPanel } from "./DuplicatesPanel";
 import { RenamePanel } from "./RenamePanel";
+import { RetroArchPanel } from "./RetroArchPanel";
 
-type Tab = "duplicates" | "rename";
+type Tab = "duplicates" | "rename" | "retroarch";
 
 export function ToolsDialog({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<Tab>("duplicates");
@@ -21,9 +22,14 @@ export function ToolsDialog({ onClose }: { onClose: () => void }) {
           <button className={tab === "rename" ? "active" : ""} onClick={() => setTab("rename")}>
             Rename
           </button>
+          <button className={tab === "retroarch" ? "active" : ""} onClick={() => setTab("retroarch")}>
+            RetroArch
+          </button>
         </div>
         <div className="modal-body">
-          {tab === "duplicates" ? <DuplicatesPanel /> : <RenamePanel />}
+          {tab === "duplicates" && <DuplicatesPanel />}
+          {tab === "rename" && <RenamePanel />}
+          {tab === "retroarch" && <RetroArchPanel />}
         </div>
       </div>
     </div>

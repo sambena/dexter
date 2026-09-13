@@ -51,6 +51,7 @@ export function TopBar({
         listen<ScanProgress>("art://progress", (e) => onProgress(e.payload)),
         listen<ArtFetchSummary>("art://done", (e) => setLastSummary({ job: "art", summary: e.payload })),
         listen<ScanProgress>("storage://progress", (e) => onProgress(e.payload)),
+        listen<ScanProgress>("export://progress", (e) => onProgress(e.payload)),
       ]);
       if (cancelled) {
         listeners.forEach((un) => un());

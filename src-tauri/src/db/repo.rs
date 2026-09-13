@@ -997,6 +997,44 @@ pub fn list_matched_games_missing_art(conn: &Connection) -> rusqlite::Result<Vec
     rows.collect()
 }
 
+/// A system's files as they go into a RetroArch playlist, in library order,
+/// each with the box art the library shows for it.
+pub fn list_playlist_roms(conn: &Connection, system_id: i64) -> rusqlite::Result<Vec<crate::emulators::playlist::PlaylistRom>> {
+    let mut stmt = conn.prepare(
+        "SELECT r.id, r.file_path, r.archive_member, r.file_name, dg.name, r.title_name, r.title_kind,
+                r.title_version, CASE WHEN r.match_status = 'matched' THEN r.crc32 END
+         FROM roms r
+         LEFT JOIN dat_roms dr ON dr.id = r.dat_rom_id
+         LEFT JOIN dat_games dg ON dg.id = COALESCE(dr.dat_game_id, r.identified_game_id)
+         WHERE r.system_id = ?1
+         ORDER BY COALESCE(dg.name, r.title_name, r.file_name)",
+    )?;
+    let rows = stmt
+        .query_map(params![system_id], |r| {
+            let file_path: String = r.get(1)?;
+            let archive_member: Option<String> = r.get(2)?;
+            let file_name: String = r.get(3)?;
+            let title_kind: Option<String> = r.get(6)?;
+            Ok(crate::emulators::playlist::PlaylistRom {
+                rom_id: r.get(0)?,
+                path: crate::commands::maintenance::on_disk_path(&file_path, archive_member.as_deref()),
+                label: display_name(r.get(4)?, r.get(5)?, title_kind.clone(), r.get(7)?, &file_name),
+                file_name: archive_member.clone().unwrap_or(file_name),
+                archive_member,
+                crc32: r.get(8)?,
+                title_kind,
+                box_art: None,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.into_iter()
+        .map(|mut rom| {
+            rom.box_art = get_box_art_path(conn, rom.rom_id)?;
+            Ok(rom)
+        })
+        .collect()
+}
+
 pub struct RomArtTarget {
     pub rom_id: i64,
     pub folder_name: String,

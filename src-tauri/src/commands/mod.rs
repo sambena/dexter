@@ -2,6 +2,7 @@ pub mod art;
 pub mod control;
 pub mod dat;
 pub mod emulators;
+pub mod export;
 pub mod hash;
 pub mod launch;
 pub mod maintenance;

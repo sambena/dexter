@@ -2,6 +2,7 @@
 //! RetroArch cores and standalone emulators run it, and how to launch them.
 
 pub mod detect;
+pub mod playlist;
 pub mod retroarch;
 
 /// A system's platform names as libretro and No-Intro/Redump spell them,

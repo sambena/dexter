@@ -14,6 +14,8 @@ pub struct RetroArch {
     pub exe: PathBuf,
     pub cores_dir: PathBuf,
     pub info_dir: PathBuf,
+    pub playlists_dir: PathBuf,
+    pub thumbnails_dir: PathBuf,
 }
 
 impl RetroArch {
@@ -36,6 +38,8 @@ impl RetroArch {
             exe: exe.to_path_buf(),
             cores_dir: dir_setting("libretro_directory", "cores"),
             info_dir: dir_setting("libretro_info_path", "info"),
+            playlists_dir: dir_setting("playlist_directory", "playlists"),
+            thumbnails_dir: dir_setting("thumbnails_directory", "thumbnails"),
         }
     }
 
@@ -133,6 +137,7 @@ mod tests {
         let ra = RetroArch::at(&dir.join("retroarch.exe"));
         assert_eq!(ra.cores_dir, dir.join("cores64"));
         assert_eq!(ra.info_dir, dir.join("info"));
+        assert_eq!(ra.playlists_dir, dir.join("playlists"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

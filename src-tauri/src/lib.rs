@@ -89,6 +89,7 @@ pub fn run() {
             commands::emulators::set_retroarch_path,
             commands::emulators::set_system_emulator_choice,
             commands::emulators::auto_configure_emulators,
+            commands::export::export_retroarch_playlists,
             commands::dat::pick_dat_file,
             commands::dat::import_dat_file,
             commands::dat::pick_dat_folder,

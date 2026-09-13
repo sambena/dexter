@@ -31,7 +31,7 @@ impl Environment {
         Environment { retroarch, cores, installed_cores, standalone }
     }
 
-    fn core_name(&self, id: &str) -> String {
+    pub(crate) fn core_name(&self, id: &str) -> String {
         self.cores.iter().find(|c| c.id == id).map_or_else(|| id.to_string(), |c| c.name.clone())
     }
 }
@@ -194,13 +194,13 @@ fn apply_choice(conn: &rusqlite::Connection, system_id: i64, choice: &EmulatorCh
     .map_err(|e| e.to_string())
 }
 
-struct Snapshot {
-    systems: Vec<SystemDto>,
+pub(crate) struct Snapshot {
+    pub(crate) systems: Vec<SystemDto>,
     dat_names: HashMap<i64, Vec<String>>,
     saved_retroarch: Option<PathBuf>,
 }
 
-fn snapshot(app: &tauri::AppHandle) -> Result<Snapshot, String> {
+pub(crate) fn snapshot(app: &tauri::AppHandle) -> Result<Snapshot, String> {
     let state = app.state::<AppState>();
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     Ok(Snapshot {
@@ -211,14 +211,14 @@ fn snapshot(app: &tauri::AppHandle) -> Result<Snapshot, String> {
 }
 
 /// Detection walks the disk, so it runs without holding the database lock.
-fn environment_for(snapshot: &Snapshot) -> (Environment, bool) {
+pub(crate) fn environment_for(snapshot: &Snapshot) -> (Environment, bool) {
     let detection = detect::detect();
     let saved = snapshot.saved_retroarch.clone().filter(|p| p.is_file());
     let detected = saved.is_none() && detection.retroarch.is_some();
     (Environment::new(saved.or(detection.retroarch), detection.standalone), detected)
 }
 
-fn platforms_of(snapshot: &Snapshot, system: &SystemDto) -> Vec<String> {
+pub(crate) fn platforms_of(snapshot: &Snapshot, system: &SystemDto) -> Vec<String> {
     let dats = snapshot.dat_names.get(&system.id).cloned().unwrap_or_default();
     known::platform_names(&system.folder_name, &dats)
 }
