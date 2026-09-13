@@ -159,7 +159,7 @@ export function DuplicatesPanel() {
       </div>
 
       <p className="hint">
-        Files that are byte-for-byte identical, and discs or Wii U title folders with the same ID and version:
+        Files that are byte-for-byte identical, and GameCube/Wii discs with the same game ID and revision:
         keeping any one copy loses nothing. Also listed are unverified files named as a game you already have a
         verified copy of; those tagged as altered copies ([f1], [a1], …) are preselected. Deleted files can be
         restored: from the Recycle Bin for files on this PC, or from the "_Deleted by Dexter" folder for files on a
@@ -178,8 +178,8 @@ export function DuplicatesPanel() {
               <div className="dupe-group-title">
                 {g.files[0].display_name}
                 {g.kind === "same-title" && (
-                  <span className="dupe-hash" title="Discs and title folders can't always be compared byte for byte, but these have the same ID and version.">
-                    same title and version
+                  <span className="dupe-hash" title="Disc images in different formats can't be compared byte for byte, but these have the same game ID and revision.">
+                    same disc
                   </span>
                 )}
                 {g.kind === "unverified-copy" && (

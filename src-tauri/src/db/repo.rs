@@ -1040,17 +1040,19 @@ pub fn list_duplicate_groups(conn: &Connection) -> rusqlite::Result<Vec<Duplicat
         }
     }
 
-    // Title folders have no hash, but two with the same title ID and version
-    // are the same install.
+    // Disc images in different containers (.iso and .wbfs) can't share a hash,
+    // but two with the same game ID and revision are the same disc. Only disc
+    // IDs (six characters) count: Wii U title folders with the same title ID
+    // and version aren't reliably the same, so they're never grouped.
     let mut stmt = conn.prepare(
         "SELECT r.system_id || ':' || r.title_id || ':v' || r.title_version, r.id, r.file_name, r.file_path, r.archive_member,
                 r.size, s.name, dg.name, r.title_name, r.title_kind, r.title_version
          FROM roms r
          LEFT JOIN systems s ON s.id = r.system_id
          LEFT JOIN dat_games dg ON dg.id = r.identified_game_id
-         WHERE r.title_id IS NOT NULL
+         WHERE LENGTH(r.title_id) = 6
            AND (r.system_id, r.title_id, r.title_version) IN (
-               SELECT system_id, title_id, title_version FROM roms WHERE title_id IS NOT NULL
+               SELECT system_id, title_id, title_version FROM roms WHERE LENGTH(title_id) = 6
                GROUP BY system_id, title_id, title_version HAVING COUNT(*) > 1)
          ORDER BY 1, r.file_path",
     )?;
@@ -1295,10 +1297,23 @@ mod tests {
             ]
         );
 
+        assert!(list_duplicate_groups(&conn).unwrap().is_empty(), "title folders are never grouped by title ID");
+
+        // Disc images of the same game ID and revision are, whatever the container.
+        for path in ["Skyward Sword.iso", "Skyward Sword.wbfs"] {
+            upsert_pending_rom(&conn, 1, path, path, Some(1), None).unwrap();
+            let disc = TitleInfo {
+                title_id: "SOUE01".into(),
+                version: 0,
+                kind: TitleKind::Game,
+                name: "The Legend of Zelda Skyward Sword".into(),
+                product_code: Some("SOUE01".into()),
+            };
+            set_title_info(&conn, path, Some(&disc)).unwrap();
+        }
         let groups = list_duplicate_groups(&conn).unwrap();
-        assert_eq!(groups.len(), 1, "only the two copies of the same game and version");
-        assert_eq!(groups[0].kind, "same-title");
-        assert_eq!(groups[0].files.len(), 2);
+        assert_eq!(groups.len(), 1);
+        assert_eq!((groups[0].kind.as_str(), groups[0].files.len()), ("same-title", 2));
 
         let id: i64 = conn.query_row("SELECT id FROM roms WHERE file_path = 'MARIO KART 8 (UPDATE DATA)'", [], |r| r.get(0)).unwrap();
         let details = get_rom_details(&conn, id).unwrap().unwrap();
