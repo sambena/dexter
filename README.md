@@ -110,4 +110,23 @@ src-tauri/src/
   api/                   command registry and local HTTP server
   cli.rs, bin/           dexter-cli
   storage.rs             library database and box art locations
+scripts/                 maintenance scripts, e.g. regenerating THIRD-PARTY-LICENSES.txt
 ```
+
+## License
+
+Dexter is free software, licensed under the [GNU General Public License v3.0 or later](LICENSE). You can use, study, share and modify it; if you distribute a modified version, you must make its source available under the same license.
+
+Dexter's dependencies keep their own licenses, which are listed with their full texts in [THIRD-PARTY-LICENSES.txt](THIRD-PARTY-LICENSES.txt) and installed alongside the app. After changing dependencies, regenerate it with:
+
+```bash
+node scripts/third-party-licenses.mjs
+```
+
+### Acknowledgements
+- The RVZ reader follows the format documentation and junk-data generator of the [Dolphin](https://dolphin-emu.org/) emulator (GPL-2.0-or-later).
+- The ECM format was created by Neill Corlett.
+- Box art comes from the [libretro-thumbnails](https://github.com/libretro-thumbnails) project and is downloaded on your machine, not distributed with Dexter.
+- DAT files come from [No-Intro](https://no-intro.org/) and [Redump](http://redump.org/).
+
+Dexter doesn't include or download games, BIOS files or any other copyrighted content, and doesn't bypass copy protection.

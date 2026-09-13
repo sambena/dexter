@@ -1,8 +1,10 @@
 [package]
 name = "rom-manager"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "Dexter, a ROM collection manager"
+authors = ["Sam Bryan"]
+license = "GPL-3.0-or-later"
+repository = "https://github.com/sambena/rom-manager"
 edition = "2021"
 default-run = "rom-manager"
 

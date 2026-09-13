@@ -28,7 +28,13 @@
   "bundle": {
     "active": true,
     "targets": ["nsis", "msi"],
-    "publisher": "Sam Bena",
+    "publisher": "Sam Bryan",
+    "license": "GPL-3.0-or-later",
+    "licenseFile": "../LICENSE",
+    "resources": {
+      "../LICENSE": "LICENSE",
+      "../THIRD-PARTY-LICENSES.txt": "THIRD-PARTY-LICENSES.txt"
+    },
     "shortDescription": "ROM collection manager",
     "longDescription": "Browse, identify and organise a local ROM collection using No-Intro and Redump DAT files.",
     "windows": {
