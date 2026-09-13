@@ -91,19 +91,320 @@ pub fn http_client() -> anyhow::Result<reqwest::blocking::Client> {
         .build()?)
 }
 
-pub fn fetch_box_art(client: &reqwest::blocking::Client, folder_name: &str, game_name: &str) -> anyhow::Result<Vec<u8>> {
+/// The names of the box art images in each thumbnail repo, fetched the first
+/// time an exact name isn't found. One per download job, so a bulk download
+/// lists each system once.
+#[derive(Default)]
+pub struct ThumbnailIndex {
+    listings: HashMap<&'static str, Option<Vec<String>>>,
+}
+
+impl ThumbnailIndex {
+    fn listing(&mut self, client: &reqwest::blocking::Client, repo: &'static str) -> Option<&[String]> {
+        self.listings
+            .entry(repo)
+            .or_insert_with(|| fetch_listing(client, repo).ok())
+            .as_deref()
+    }
+}
+
+/// libretro's thumbnail server mirrors the repos and, unlike GitHub's API,
+/// lists a folder without a rate limit.
+fn fetch_listing(client: &reqwest::blocking::Client, repo: &str) -> anyhow::Result<Vec<String>> {
+    let url = format!(
+        "https://thumbnails.libretro.com/{}/Named_Boxarts/",
+        encode_path_segment(&repo.replace('_', " "))
+    );
+    let response = client.get(&url).send()?;
+    if !response.status().is_success() {
+        anyhow::bail!("couldn't list {} ({})", url, response.status());
+    }
+    Ok(parse_listing(&response.text()?))
+}
+
+/// Image names (without ".png") from an Apache directory index.
+fn parse_listing(html: &str) -> Vec<String> {
+    html.split("href=\"")
+        .skip(1)
+        .filter_map(|rest| rest.split('"').next())
+        .filter_map(|href| href.strip_suffix(".png"))
+        .filter(|href| !href.contains('/'))
+        .map(percent_decode)
+        .collect()
+}
+
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Some(b) = s.get(i + 1..i + 3).and_then(|hex| u8::from_str_radix(hex, 16).ok()) {
+                out.push(b);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Consoles whose games Nintendo re-released as Virtual Console titles, by the
+/// tag No-Intro gives them, e.g. "Majora's Mask (USA) (N64) (Virtual Console)".
+fn virtual_console_repo(tag: &str) -> Option<&'static str> {
+    match tag {
+        "NES" | "Famicom" => thumbnails_repo("nes"),
+        "SNES" | "Super Famicom" => thumbnails_repo("snes"),
+        "N64" => thumbnails_repo("n64"),
+        "GB" => thumbnails_repo("gb"),
+        "GBC" => thumbnails_repo("gbc"),
+        "GBA" => thumbnails_repo("gba"),
+        "DS" => thumbnails_repo("ds"),
+        "Wii" => thumbnails_repo("wii"),
+        "Genesis" | "Mega Drive" => thumbnails_repo("genesis"),
+        _ => None,
+    }
+}
+
+/// The title without its (…) and […] tags.
+fn title_of(name: &str) -> String {
+    let mut title = String::new();
+    let mut depth = 0i32;
+    for c in name.chars() {
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth = (depth - 1).max(0),
+            c if depth == 0 => title.push(c),
+            _ => {}
+        }
+    }
+    title
+}
+
+/// Lower-case letters and digits only, so "&" (saved as "_"), spacing and
+/// punctuation don't matter.
+fn comparable(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn tags_of(name: &str) -> Vec<String> {
+    name.split('(')
+        .skip(1)
+        .filter_map(|rest| rest.split(')').next())
+        .map(|t| t.trim().to_string())
+        .collect()
+}
+
+const REGIONS: &[&str] = &[
+    "World", "USA", "Europe", "Japan", "Asia", "Australia", "Korea", "China", "Taiwan", "Hong Kong", "Brazil",
+    "Canada", "France", "Germany", "Spain", "Italy", "Netherlands", "Sweden", "Scandinavia", "UK", "Russia",
+    "Latin America", "Mexico", "Argentina", "Poland", "Portugal", "Greece", "Denmark", "Norway", "Finland",
+];
+
+fn regions_in(tag: &str) -> Option<Vec<&str>> {
+    let parts: Vec<&str> = tag.split(',').map(str::trim).collect();
+    parts.iter().all(|p| REGIONS.contains(p)).then_some(parts)
+}
+
+/// "En", "Fr,De", "Zh-Hant": a language list.
+fn is_languages(tag: &str) -> bool {
+    tag.split(',').map(str::trim).all(|p| {
+        let mut chars = p.chars();
+        matches!((chars.next(), chars.next()), (Some(a), Some(b)) if a.is_ascii_uppercase() && b.is_ascii_lowercase())
+            && p.len() <= 7
+            && p.chars().all(|c| c.is_ascii_alphabetic() || c == '-')
+    })
+}
+
+fn is_revision(tag: &str) -> bool {
+    tag.starts_with("Rev ") || (tag.starts_with('v') && tag[1..].starts_with(|c: char| c.is_ascii_digit()))
+}
+
+/// Images that are a different product from the game, even with its title.
+fn disqualifies(tag: &str) -> bool {
+    let tag = tag.to_lowercase();
+    ["beta", "proto", "demo", "kiosk", "debug", "sample", "pirate", "hack", "unl"]
+        .iter()
+        .any(|word| tag.split(|c: char| !c.is_alphanumeric()).any(|w| w == *word))
+}
+
+/// The image in `listing` that best stands in for `game_name` when there's
+/// none of that exact name: the same title, sharing a region if any does,
+/// with as few extra tags (other editions, re-releases) as possible.
+/// Languages and revisions don't change the box, so they barely count.
+fn best_match<'a>(game_name: &str, listing: &'a [String]) -> Option<&'a str> {
+    let title = comparable(&title_of(game_name));
+    if title.is_empty() {
+        return None;
+    }
+    let wanted_tags = tags_of(game_name);
+    let wanted_regions: Vec<&str> = wanted_tags.iter().filter_map(|t| regions_in(t)).flatten().collect();
+
+    listing
+        .iter()
+        .filter(|candidate| comparable(&title_of(candidate)) == title)
+        .filter_map(|candidate| {
+            let mut score = 0i32;
+            for tag in tags_of(candidate) {
+                if wanted_tags.contains(&tag) {
+                    continue;
+                }
+                if let Some(regions) = regions_in(&tag) {
+                    if regions.iter().any(|r| wanted_regions.contains(r)) {
+                        score += 100;
+                    }
+                } else if disqualifies(&tag) && !wanted_tags.iter().any(|w| w.eq_ignore_ascii_case(&tag)) {
+                    return None;
+                } else if is_revision(&tag) || is_languages(&tag) {
+                    score -= 1;
+                } else {
+                    score -= 20;
+                }
+            }
+            // A region already equal to the wanted tag was skipped above.
+            if tags_of(candidate).iter().any(|t| wanted_tags.contains(t) && regions_in(t).is_some()) {
+                score += 100;
+            }
+            Some((score, candidate))
+        })
+        .max_by_key(|(score, candidate)| (*score, std::cmp::Reverse(candidate.len())))
+        .map(|(_, candidate)| candidate.as_str())
+}
+
+fn download(client: &reqwest::blocking::Client, repo: &str, image_name: &str) -> anyhow::Result<Option<Vec<u8>>> {
+    let url = format!(
+        "https://raw.githubusercontent.com/libretro-thumbnails/{}/master/Named_Boxarts/{}.png",
+        repo,
+        encode_path_segment(&sanitize_name(image_name))
+    );
+    let response = client.get(&url).send()?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    if !response.status().is_success() {
+        anyhow::bail!("{} ({})", url, response.status());
+    }
+    Ok(Some(response.bytes()?.to_vec()))
+}
+
+pub fn fetch_box_art(
+    client: &reqwest::blocking::Client,
+    index: &mut ThumbnailIndex,
+    folder_name: &str,
+    game_name: &str,
+) -> anyhow::Result<Vec<u8>> {
     let repo = thumbnails_repo(folder_name)
         .ok_or_else(|| anyhow::anyhow!("No known box art source for system \"{}\".", folder_name))?;
     // Updates and DLC share their game's box, which is listed without the tag.
     let game_name = game_name.replace(" (Update)", "").replace(" (DLC)", "");
-    let file_name = encode_path_segment(&sanitize_name(&game_name));
-    let url = format!(
-        "https://raw.githubusercontent.com/libretro-thumbnails/{}/master/Named_Boxarts/{}.png",
-        repo, file_name
-    );
-    let response = client.get(&url).send()?;
-    if !response.status().is_success() {
-        anyhow::bail!("No box art found for \"{}\" ({})", game_name, response.status());
+
+    // A Virtual Console title's box is with the original console's games.
+    let mut sources = Vec::new();
+    let tags = tags_of(&game_name);
+    if tags.iter().any(|t| t == "Virtual Console") {
+        if let Some((tag, vc_repo)) = tags.iter().find_map(|t| virtual_console_repo(t).map(|r| (t, r))) {
+            let original = game_name
+                .replace(" (Virtual Console)", "")
+                .replace(&format!(" ({})", tag), "");
+            sources.push((vc_repo, original));
+        }
     }
-    Ok(response.bytes()?.to_vec())
+    sources.push((repo, game_name.clone()));
+
+    for (repo, name) in &sources {
+        if let Some(bytes) = download(client, repo, name)? {
+            return Ok(bytes);
+        }
+    }
+    for (repo, name) in &sources {
+        let Some(image) = index.listing(client, repo).and_then(|l| best_match(name, l)).map(str::to_string) else {
+            continue;
+        };
+        if let Some(bytes) = download(client, repo, &image)? {
+            return Ok(bytes);
+        }
+    }
+    anyhow::bail!("No box art found for \"{}\"", game_name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn listing_names_are_decoded() {
+        let html = r#"<a href="?C=N;O=D">Name</a><a href="/Nintendo%20-%20Wii%20U/">Parent</a>
+            <a href="Legend%20of%20Zelda%2c%20The%20-%20Majora's%20Mask%20(USA).png">x</a>
+            <a href="Mario%20_%20Sonic%20(USA).png">y</a>"#;
+        assert_eq!(
+            parse_listing(html),
+            names(&["Legend of Zelda, The - Majora's Mask (USA)", "Mario _ Sonic (USA)"])
+        );
+    }
+
+    #[test]
+    fn closest_name_shares_title_and_region() {
+        let listing = names(&[
+            "Legend of Zelda, The - The Wind Waker HD (Europe, Australia) (En,Fr,De,Es,It)",
+            "Legend of Zelda, The - The Wind Waker HD (USA, Asia) (En,Fr,Es)",
+            "Legend of Zelda, The - Twilight Princess HD (Europe, Australia) (En,Fr,De,Es,It) (Rev 2)",
+            "Legend of Zelda, The - Twilight Princess HD (USA) (En,Fr,Es) (Rev 2)",
+            "Zelda no Densetsu - Twilight Princess HD (Japan) (Rev 1)",
+            "Legend of Zelda, The - Breath of the Wild (USA) (En,Fr,Es)",
+        ]);
+        let pick = |name| best_match(name, &listing);
+        assert_eq!(
+            pick("Legend of Zelda, The - The Wind Waker HD (USA) (En,Fr,Es)"),
+            Some("Legend of Zelda, The - The Wind Waker HD (USA, Asia) (En,Fr,Es)")
+        );
+        assert_eq!(
+            pick("Legend of Zelda, The - Twilight Princess HD (Europe) (En,Fr,De,Es,It)"),
+            Some("Legend of Zelda, The - Twilight Princess HD (Europe, Australia) (En,Fr,De,Es,It) (Rev 2)")
+        );
+        assert_eq!(
+            pick("Legend of Zelda, The - Breath of the Wild (USA)"),
+            Some("Legend of Zelda, The - Breath of the Wild (USA) (En,Fr,Es)")
+        );
+        assert_eq!(pick("Legend of Zelda, The - Skyward Sword (USA)"), None);
+    }
+
+    #[test]
+    fn other_editions_lose_to_the_plain_release() {
+        let listing = names(&[
+            "Legend of Zelda, The - Majora's Mask (Europe) (En,Fr,De,Es) (Rev 1) (Wii Virtual Console)",
+            "Legend of Zelda, The - Majora's Mask (USA) (Demo) (Kiosk)",
+            "Legend of Zelda, The - Majora's Mask (USA) (GameCube)",
+            "Legend of Zelda, The - Majora's Mask (USA)",
+            "Legend of Zelda, The - Majora's Mask - Redux (USA)",
+            "1080 Snowboarding (Europe) (En,Ja,Fr,De)",
+            "1080 Snowboarding (Japan, USA) (En,Ja)",
+            "1080 Snowboarding (USA) (En,Ja) (LodgeNet)",
+        ]);
+        assert_eq!(
+            best_match("Legend of Zelda, The - Majora's Mask (USA)", &listing),
+            Some("Legend of Zelda, The - Majora's Mask (USA)")
+        );
+        assert_eq!(
+            best_match("1080 Snowboarding (USA, Europe)", &listing),
+            Some("1080 Snowboarding (Japan, USA) (En,Ja)")
+        );
+        // Only a demo exists: no box rather than the wrong one.
+        assert_eq!(best_match("Some Game (USA)", &names(&["Some Game (USA) (Demo)"])), None);
+    }
+
+    #[test]
+    fn virtual_console_tags_name_the_original_console() {
+        assert_eq!(virtual_console_repo("N64"), Some("Nintendo_-_Nintendo_64"));
+        assert_eq!(virtual_console_repo("DS"), Some("Nintendo_-_Nintendo_DS"));
+        assert_eq!(virtual_console_repo("En,Fr"), None);
+    }
 }

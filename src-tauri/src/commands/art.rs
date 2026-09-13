@@ -70,7 +70,9 @@ fn fetch_box_art_blocking(rom_id: i64, app: &AppHandle) -> Result<String, String
     };
 
     let client = thumbnails::http_client().map_err(|e| e.to_string())?;
-    let bytes = thumbnails::fetch_box_art(&client, &folder_name, &game_name).map_err(|e| e.to_string())?;
+    let mut index = thumbnails::ThumbnailIndex::default();
+    let bytes =
+        thumbnails::fetch_box_art(&client, &mut index, &folder_name, &game_name).map_err(|e| e.to_string())?;
 
     let dir = art_dir(app)?;
     let file_path = dir.join(format!("game_{}.png", dat_game_id));
@@ -109,6 +111,7 @@ fn fetch_all_box_art_blocking(app: &AppHandle) -> Result<ArtFetchSummary, String
     let mut summary = ArtFetchSummary::default();
     let dir = art_dir(app)?;
     let client = thumbnails::http_client().map_err(|e| e.to_string())?;
+    let mut index = thumbnails::ThumbnailIndex::default();
 
     for (i, target) in targets.iter().enumerate() {
         if state.cancel_flag.load(Ordering::SeqCst) {
@@ -119,7 +122,7 @@ fn fetch_all_box_art_blocking(app: &AppHandle) -> Result<ArtFetchSummary, String
             ScanProgress { current: i + 1, total, current_file: target.game_name.clone() },
         );
 
-        match thumbnails::fetch_box_art(&client, &target.folder_name, &target.game_name) {
+        match thumbnails::fetch_box_art(&client, &mut index, &target.folder_name, &target.game_name) {
             Ok(bytes) => {
                 let file_path = dir.join(format!("game_{}.png", target.dat_game_id));
                 std::fs::write(&file_path, &bytes).map_err(|e| e.to_string())?;
