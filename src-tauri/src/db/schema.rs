@@ -170,13 +170,24 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         conn.execute_batch(&format!("BEGIN; {} PRAGMA user_version = 8; COMMIT;", SCHEMA_V8))?;
     }
     if version < 9 {
-        migrate_v9_repairs(conn)?;
+        migrate_with_format_changes(conn, SCHEMA_V9, 9)?;
     }
     if version < 10 {
         conn.execute_batch(&format!("BEGIN; {} PRAGMA user_version = 10; COMMIT;", SCHEMA_V10))?;
     }
+    if version < 11 {
+        migrate_with_format_changes(conn, SCHEMA_V11, 11)?;
+    }
     Ok(())
 }
+
+const SCHEMA_V11: &str = r#"
+-- Hash & Match can now also restore trimmed padding and un-interleave SNES
+-- dumps (scanner::repair), so unmatched cartridge-sized files get another try.
+-- GameCube .rvz images become hashable too; the Rust side requeues those.
+UPDATE roms SET match_status = 'pending'
+ WHERE match_status IN ('unmatched', 'error') AND size <= 67108864;
+"#;
 
 const SCHEMA_V10: &str = r#"
 -- What an extracted title folder (Wii U) says about itself, read from its
@@ -207,12 +218,14 @@ UPDATE roms SET match_status = 'pending'
    AND (size <= 67108864 OR LOWER(file_name) LIKE '%.cue' OR LOWER(file_name) LIKE '%.gdi');
 "#;
 
-/// v9: repairs and cue sheets (see SCHEMA_V9), plus two format changes:
-/// .ecm files are now decoded and hashed, and Switch files can't be verified.
-fn migrate_v9_repairs(conn: &Connection) -> rusqlite::Result<()> {
+/// Runs `sql`, then brings statuses in line with scanner::formats, whose list
+/// of unverifiable formats changed in this version: files now unverifiable
+/// move there, and files a new decoder can read (.ecm in v9, .rvz in v11)
+/// are queued for Hash & Match.
+fn migrate_with_format_changes(conn: &Connection, sql: &str, version: i64) -> rusqlite::Result<()> {
     conn.execute_batch("BEGIN;")?;
     let result = (|| {
-        conn.execute_batch(SCHEMA_V9)?;
+        conn.execute_batch(sql)?;
         let rows: Vec<(i64, String, String)> = {
             let mut stmt = conn.prepare(
                 "SELECT id, file_name, match_status FROM roms
@@ -225,11 +238,14 @@ fn migrate_v9_repairs(conn: &Connection) -> rusqlite::Result<()> {
             let unverifiable = crate::scanner::formats::is_unverifiable(&file_name);
             if unverifiable && status != "unverifiable" {
                 conn.execute("UPDATE roms SET match_status = 'unverifiable', dat_rom_id = NULL WHERE id = ?1", [id])?;
-            } else if !unverifiable && status == "unverifiable" && crate::scanner::ecm::decoded_name(&file_name).is_some() {
+            } else if !unverifiable
+                && status == "unverifiable"
+                && (crate::scanner::ecm::decoded_name(&file_name).is_some() || crate::scanner::rvz::is_rvz(&file_name))
+            {
                 conn.execute("UPDATE roms SET match_status = 'pending' WHERE id = ?1", [id])?;
             }
         }
-        conn.execute_batch("PRAGMA user_version = 9;")
+        conn.execute_batch(&format!("PRAGMA user_version = {};", version))
     })();
     match result {
         Ok(()) => conn.execute_batch("COMMIT;"),
@@ -314,7 +330,7 @@ mod tests {
         assert_eq!(status("Contra.nes"), "matched");
         assert_eq!(status("Metroid.gba"), "unmatched");
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(version, 10);
+        assert_eq!(version, 11);
     }
 
     #[test]
@@ -348,7 +364,8 @@ mod tests {
         assert_eq!(status("FF5.cue"), "pending");
         assert_eq!(status("FF7 (Disc 1).bin.ecm"), "pending");
         assert_eq!(status("TOTK 1.2.0.nsp"), "unverifiable");
-        assert_eq!(status("F-Zero GX (USA).rvz"), "unverifiable");
+        // v11 decodes GameCube .rvz images.
+        assert_eq!(status("F-Zero GX (USA).rvz"), "pending");
         assert_eq!(status("Tetris (World).gb"), "matched");
         assert_eq!(status("MARIO KART 8 [AMKE01]"), "unverifiable");
     }
@@ -377,7 +394,8 @@ mod tests {
             conn.query_row("SELECT match_status FROM roms WHERE file_name = ?1", [name], |r| r.get(0))
                 .unwrap()
         };
-        assert_eq!(status("F-Zero GX (USA).rvz"), "unverifiable");
+        // v11 decodes GameCube .rvz images.
+        assert_eq!(status("F-Zero GX (USA).rvz"), "pending");
         assert_eq!(status("MARIO KART 8 [AMKE01]"), "unverifiable");
         // v9 made .ecm hashable again, and requeues small unmatched files.
         assert_eq!(status("FF7 (Disc 1).bin.ecm"), "pending");

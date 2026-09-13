@@ -1,7 +1,7 @@
 use crate::db::repo;
 use crate::models::{ScanProgress, ScanSummary};
 use crate::scanner::walker::ScanTarget;
-use crate::scanner::{archive, formats, walker, wiiu};
+use crate::scanner::{archive, disc, formats, walker, wiiu};
 use crate::state::AppState;
 use std::sync::atomic::Ordering;
 use tauri::{Emitter, State};
@@ -70,6 +70,9 @@ pub async fn scan_library(app: tauri::AppHandle, state: State<'_, AppState>) -> 
         // Read before taking the lock: it's a couple of small files over the network.
         let title_info = match target {
             ScanTarget::FolderRom(path) => wiiu::read_title_info(path),
+            ScanTarget::File(path) if path.file_name().and_then(|n| n.to_str()).is_some_and(disc::is_disc_image) => {
+                disc::read_disc_title(path)
+            }
             ScanTarget::File(_) => None,
         };
         let conn = state.db.lock().map_err(|e| e.to_string())?;
@@ -127,8 +130,11 @@ pub async fn scan_library(app: tauri::AppHandle, state: State<'_, AppState>) -> 
                     summary.pending += 1;
                     repo::upsert_pending_rom
                 };
-                upsert(&conn, *system_id, &path.display().to_string(), &file_name, size, None)
-                    .map_err(|e| e.to_string())?;
+                let file_path = path.display().to_string();
+                upsert(&conn, *system_id, &file_path, &file_name, size, None).map_err(|e| e.to_string())?;
+                if disc::is_disc_image(&file_name) {
+                    repo::set_title_info(&conn, &file_path, title_info.as_ref()).map_err(|e| e.to_string())?;
+                }
                 summary.scanned_files += 1;
             }
         }

@@ -44,6 +44,9 @@ function keeperOf(group: DuplicateGroupDto): number {
   return (named ?? group.files[0]).id;
 }
 
+/** GoodTools tags for altered copies: bad, fixed, alternate, hacked, overdumped, pirate, trainer. */
+const ALTERED_TAG = /\[(b|f|a|h|o|p|t)\d*\]/i;
+
 export function describeDeletion(summary: MaintenanceSummary): string {
   const parts = [`Deleted ${summary.succeeded} file${summary.succeeded === 1 ? "" : "s"}.`];
   if (summary.moved_to.length)
@@ -68,9 +71,18 @@ export function DuplicatesPanel() {
       const result = await api.listDuplicates();
       setGroups(result);
       // Preselect every copy but one in each group: keeping one is almost
-      // always the intent, and the choice stays editable.
+      // always the intent, and the choice stays editable. For a game with a
+      // verified copy, only unmatched copies tagged as altered are preselected:
+      // an untagged one may be a different release of the game.
       const preset = new Set<number>();
       result.forEach((g) => {
+        if (g.kind === "unverified-copy") {
+          g.files
+            .slice(g.verified_count)
+            .filter((f) => ALTERED_TAG.test(f.archive_member ?? f.file_name))
+            .forEach((f) => preset.add(f.id));
+          return;
+        }
         const keep = keeperOf(g);
         g.files.forEach((f) => f.id !== keep && preset.add(f.id));
       });
@@ -122,7 +134,8 @@ export function DuplicatesPanel() {
     }
   }
 
-  const totalDupes = groups?.reduce((n, g) => n + g.files.length - 1, 0) ?? 0;
+  const totalDupes =
+    groups?.reduce((n, g) => n + (g.kind === "unverified-copy" ? g.files.length - g.verified_count : g.files.length - 1), 0) ?? 0;
 
   return (
     <div className="settings-section">
@@ -146,9 +159,11 @@ export function DuplicatesPanel() {
       </div>
 
       <p className="hint">
-        Files that are byte-for-byte identical, grouped by hash, plus extracted title folders (Wii U) with the
-        same title and version. Every copy in a group is interchangeable, so keeping any one of them loses nothing. Deleted files can be restored: from the Recycle Bin for files on
-        this PC, or from the "_Deleted by Dexter" folder for files on a network share.
+        Files that are byte-for-byte identical, and discs or Wii U title folders with the same ID and version:
+        keeping any one copy loses nothing. Also listed are unverified files named as a game you already have a
+        verified copy of; those tagged as altered copies ([f1], [a1], …) are preselected. Deleted files can be
+        restored: from the Recycle Bin for files on this PC, or from the "_Deleted by Dexter" folder for files on a
+        network share.
       </p>
 
       {groups === null && <p className="hint">Scanning…</p>}
@@ -162,23 +177,30 @@ export function DuplicatesPanel() {
             <div key={g.sha1} className="dupe-group">
               <div className="dupe-group-title">
                 {g.files[0].display_name}
-                {g.same_title ? (
-                  <span className="dupe-hash" title="Extracted title folders can't be compared byte for byte, but these have the same title ID and version.">
+                {g.kind === "same-title" && (
+                  <span className="dupe-hash" title="Discs and title folders can't always be compared byte for byte, but these have the same ID and version.">
                     same title and version
                   </span>
-                ) : (
+                )}
+                {g.kind === "unverified-copy" && (
+                  <span className="dupe-hash" title="The unverified files are named as this game but don't match any dump of it: usually altered or bad copies.">
+                    unverified copies of a verified game
+                  </span>
+                )}
+                {g.kind === "identical" && (
                   <span className="mono dupe-hash" title={g.sha1}>
                     {g.sha1.slice(0, 12)}
                   </span>
                 )}
               </div>
-              {g.files.map((f) => (
+              {g.files.map((f, i) => (
                 <label key={f.id} className="dupe-file">
                   <input type="checkbox" checked={selected.has(f.id)} onChange={() => toggle(f.id)} disabled={busy} />
                   <span className="dupe-path" title={f.file_path}>
                     <bdi>{displayPath(f, settings.rom_root_path)}</bdi>
                   </span>
                   <span className="dupe-meta">
+                    {g.kind === "unverified-copy" && (i < g.verified_count ? "verified · " : "unverified · ")}
                     {f.system_name ?? ""} {formatSize(f.size)}
                   </span>
                 </label>

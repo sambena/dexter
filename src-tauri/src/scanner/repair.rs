@@ -9,6 +9,11 @@
 //!   normal SNES-only header detection doesn't apply elsewhere.
 //! - Mirrored NES chips: PRG or CHR stored twice over, with the iNES header
 //!   describing the doubled size.
+//! - Trimmed dumps: the padding at the end of the cartridge (0xFF or 0x00
+//!   bytes) was cut off to save space, e.g. a 28 MiB Nintendo 64 file for a
+//!   32 MiB cartridge.
+//! - Interleaved SNES dumps: some copiers stored a cartridge's two halves
+//!   woven together, 32 KiB block by block.
 //!
 //! Only unmatched files are tried, and only against sizes the system's DATs
 //! actually list, so a candidate is never invented out of thin air.
@@ -34,6 +39,10 @@ pub enum RepairKind {
     Header,
     /// NES PRG/CHR chips stored doubled.
     Mirrored,
+    /// End padding cut off.
+    Trimmed,
+    /// SNES halves woven together.
+    Interleaved,
 }
 
 impl RepairKind {
@@ -42,16 +51,23 @@ impl RepairKind {
             RepairKind::Overdump => "overdump",
             RepairKind::Header => "header",
             RepairKind::Mirrored => "mirrored",
+            RepairKind::Trimmed => "trimmed",
+            RepairKind::Interleaved => "interleaved",
         }
     }
 }
+
+/// Interleaving works in 32 KiB blocks; SNES cartridges are at most 6 MiB.
+const INTERLEAVE_BLOCK: usize = 0x8000;
+const MAX_INTERLEAVED_BYTES: usize = 8 << 20;
 
 #[derive(Debug, Clone)]
 pub struct Repaired {
     pub kind: RepairKind,
     /// Bytes skipped at the start.
     pub header_size: u64,
-    /// Bytes of the file left out after the data that matched.
+    /// Bytes of the file left out after the data that matched; for a trimmed
+    /// dump, the padding bytes added back instead.
     pub trailer_size: u64,
     pub digests: Digests,
 }
@@ -80,6 +96,38 @@ pub fn candidates(bytes: &[u8], dat_sizes: &[u64]) -> Vec<Repaired> {
     for start in starts {
         let body = &bytes[start as usize..];
         let body_len = body.len() as u64;
+
+        // Trimmed: the body, then padding up to each larger DAT size (at most
+        // double, as with overdumps), trying both usual padding bytes.
+        let padded_sizes: Vec<u64> =
+            sizes.iter().copied().filter(|&s| s > body_len && s <= body_len * MIN_PREFIX_FRACTION).collect();
+        if !padded_sizes.is_empty() {
+            let mut base = Hasher::new();
+            base.update(body);
+            for fill in [0xFFu8, 0x00] {
+                let mut hasher = base.clone();
+                let mut position = body_len;
+                let block = [fill; 65536];
+                for &size in &padded_sizes {
+                    while position < size {
+                        let n = (size - position).min(block.len() as u64) as usize;
+                        hasher.update(&block[..n]);
+                        position += n as u64;
+                    }
+                    out.push(Repaired {
+                        kind: RepairKind::Trimmed,
+                        header_size: start,
+                        trailer_size: size - body_len,
+                        digests: hasher.clone().finish(),
+                    });
+                }
+            }
+        }
+
+        if let Some(digests) = uninterleave(body) {
+            out.push(Repaired { kind: RepairKind::Interleaved, header_size: start, trailer_size: 0, digests });
+        }
+
         let wanted: Vec<u64> = sizes
             .iter()
             .copied()
@@ -106,6 +154,23 @@ pub fn candidates(bytes: &[u8], dat_sizes: &[u64]) -> Vec<Repaired> {
         out.push(mirrored);
     }
     out
+}
+
+/// Digests of an interleaved dump put back in order: the stored file's second
+/// half holds the even blocks and its first half the odd ones.
+fn uninterleave(body: &[u8]) -> Option<Digests> {
+    let blocks = body.len() / INTERLEAVE_BLOCK;
+    if body.len() > MAX_INTERLEAVED_BYTES || body.len() % (2 * INTERLEAVE_BLOCK) != 0 || blocks < 2 {
+        return None;
+    }
+    let half = blocks / 2;
+    let block = |i: usize| &body[i * INTERLEAVE_BLOCK..(i + 1) * INTERLEAVE_BLOCK];
+    let mut hasher = Hasher::new();
+    for i in 0..half {
+        hasher.update(block(half + i));
+        hasher.update(block(i));
+    }
+    Some(hasher.finish())
 }
 
 /// Halves `data` for as long as its two halves are identical.
@@ -164,8 +229,11 @@ mod tests {
         let mut file = game.clone();
         file.extend(std::iter::repeat_n(0xFF, 4 << 20));
 
-        let found = candidates(&file, &[1 << 20, 4 << 20, 12 << 20]);
-        // 1 MiB is under half the file, 12 MiB is past its end.
+        let found: Vec<_> = candidates(&file, &[1 << 20, 4 << 20, 32 << 20])
+            .into_iter()
+            .filter(|c| c.kind == RepairKind::Overdump)
+            .collect();
+        // 1 MiB is under half the file, 32 MiB is past its end.
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].kind, RepairKind::Overdump);
         assert_eq!((found[0].header_size, found[0].trailer_size), (0, 4 << 20));
@@ -191,7 +259,8 @@ mod tests {
         file.extend_from_slice(&game);
         file.extend(vec![0u8; 65536]);
 
-        let found = candidates(&file, &[196608, 262144]);
+        let found: Vec<_> =
+            candidates(&file, &[196608, 262144]).into_iter().filter(|c| c.kind == RepairKind::Overdump).collect();
         assert_eq!(found.len(), 1, "the whole body is the normal pass's job");
         assert_eq!((found[0].header_size, found[0].trailer_size), (16, 65536));
         assert_eq!(found[0].digests, digests_of(&[&game]));
@@ -210,6 +279,32 @@ mod tests {
         let mirrored = candidates(&file, &[]).into_iter().find(|c| c.kind == RepairKind::Mirrored).unwrap();
         assert_eq!(mirrored.digests, digests_of(&[&prg, &chr]));
         assert_eq!((mirrored.header_size, mirrored.trailer_size), (16, 24576));
+    }
+
+    #[test]
+    fn trimmed_padding_is_restored_with_either_fill_byte() {
+        let game = pattern(6 << 20, 7);
+        let mut cartridge = game.clone();
+        cartridge.extend(std::iter::repeat_n(0xFF, 2 << 20));
+
+        let found = candidates(&game, &[8 << 20, 32 << 20]);
+        let trimmed: Vec<_> = found.iter().filter(|c| c.kind == RepairKind::Trimmed).collect();
+        // One per fill byte; 32 MiB is more than double the file.
+        assert_eq!(trimmed.len(), 2);
+        assert!(trimmed.iter().any(|c| c.digests == digests_of(&[&cartridge])));
+        assert!(trimmed.iter().all(|c| (c.header_size, c.trailer_size) == (0, 2 << 20)));
+    }
+
+    #[test]
+    fn interleaved_snes_halves_are_put_back_in_order() {
+        let block = |i: u32| pattern(0x8000, 100 + i);
+        let cartridge: Vec<u8> = (0..8).flat_map(block).collect();
+        // Stored as: odd blocks, then even blocks.
+        let stored: Vec<u8> = [1, 3, 5, 7, 0, 2, 4, 6].into_iter().flat_map(block).collect();
+
+        let found = candidates(&stored, &[]);
+        let fixed = found.iter().find(|c| c.kind == RepairKind::Interleaved).unwrap();
+        assert_eq!(fixed.digests, digests_of(&[&cartridge]));
     }
 
     #[test]

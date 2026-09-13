@@ -126,6 +126,10 @@ function matchNoteExplanation(details: RomDetailsDto): string | null {
       return `This file has a ${formatBytes(details.header_size ?? 0)} header in front of the game data, added by an old copier device. Without it, the data is the verified dump.`;
     case "mirrored":
       return "This old dump stores the cartridge's chips twice over (a mirrored dump). With the repeats removed, it's the verified dump.";
+    case "trimmed":
+      return `Trimmed dump: ${formatBytes(trailer)} of empty padding at the end of the cartridge was cut off to save space. With the padding put back, it's the verified dump. Emulators run it the same.`;
+    case "interleaved":
+      return "This dump was saved by an old copier that weaves the cartridge's two halves together. Put back in order, it's the verified dump. Most emulators detect this and run it fine.";
     case "cue-tracks":
       return "This cue sheet's own text differs from Redump's (usually just the track file names), but every track it loads is a verified dump of this game.";
     default:
@@ -167,7 +171,11 @@ function matchStatusExplanation(details: RomDetailsDto, hasDat: boolean, folderN
         ? "This is an extracted title folder (thousands of files), which no DAT describes as one dump, so it can't be verified."
         : /\.(nsp|xci|nsz|xcz)$/i.test(details.file_name)
           ? "Switch game files can't be checked against a DAT: every dump carries data specific to the console or dumping tool (tickets, cartridge padding), so no two copies of a game hash the same."
-          : "This format can't be checked against a DAT: compressed or trimmed disc images (.rvz, .wbfs, .chd, …) store the disc re-encoded, and Dexter can't look inside .rar or .7z. To verify it, convert it back to the original dump (e.g. .iso, or .bin/.cue) and re-scan.";
+          : /\.rvz$/i.test(details.file_name)
+            ? "Dexter verifies GameCube .rvz images by decoding them, but not Wii ones: those store the game's data decrypted, and rebuilding the encrypted disc Redump hashed isn't supported. Dolphin can verify it instead (right-click the game → Properties → Verify)."
+            : /\.wbfs$/i.test(details.file_name)
+              ? "WBFS images leave out the unused parts of the disc, so they can never hash the same as the full disc Redump lists. Dolphin can still check the game data is intact (right-click the game → Properties → Verify)."
+              : "This format can't be checked against a DAT: compressed or trimmed disc images (.chd, .gcz, .cso, …) store the disc re-encoded, and Dexter can't look inside .rar or .7z. To verify it, convert it back to the original dump (e.g. .iso, or .bin/.cue) and re-scan.";
     case "error":
       return "Hashing failed last time (e.g. a network read error). Hash & Match will retry it automatically.";
     case "unmatched": {
@@ -301,8 +309,11 @@ ${rom.file_path}
           <>
             <dt>Title</dt>
             <dd>
-              {{ game: "Game", update: "Update", dlc: "DLC", demo: "Demo" }[details.title_kind ?? "game"]}
-              {details.title_version != null ? ` · version ${details.title_version}` : ""}
+              {details.title_id.length === 6
+                ? `Disc${details.title_version ? ` · revision ${details.title_version}` : ""}`
+                : `${{ game: "Game", update: "Update", dlc: "DLC", demo: "Demo" }[details.title_kind ?? "game"]}${
+                    details.title_version != null ? ` · version ${details.title_version}` : ""
+                  }`}
               <span className="mono title-id" title={details.product_code ?? undefined}>
                 {" "}
                 {details.title_id}
@@ -353,7 +364,9 @@ ${rom.file_path}
                 details.trailer_size
                   ? details.match_note === "mirrored"
                     ? `${formatBytes(details.trailer_size)} of repeated chip data`
-                    : `${formatBytes(details.trailer_size)} at the end`
+                    : details.match_note === "trimmed"
+                      ? `${formatBytes(details.trailer_size)} of padding added back`
+                      : `${formatBytes(details.trailer_size)} at the end`
                   : null,
               ]
                 .filter(Boolean)

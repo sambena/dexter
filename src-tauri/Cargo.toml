@@ -39,6 +39,7 @@ sha1 = "0.10"
 quick-xml = { version = "0.36", features = ["serialize"] }
 walkdir = "2"
 zip = "2"
+zstd = "0.13"
 reqwest = { version = "0.12", features = ["blocking"] }
 thiserror = "1"
 anyhow = "1"

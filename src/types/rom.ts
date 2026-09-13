@@ -49,7 +49,7 @@ export interface RomDetailsDto {
   trailer_size: number | null;
   emulator_core: string | null;
   /** How a match was found when the file isn't the DAT's exact dump. */
-  match_note: "overdump" | "header" | "mirrored" | "cue-tracks" | null;
+  match_note: "overdump" | "header" | "mirrored" | "trimmed" | "interleaved" | "cue-tracks" | null;
   /** From a title folder's own XML (Wii U). */
   title_id: string | null;
   title_version: number | null;
@@ -125,8 +125,14 @@ export interface DuplicateFileDto {
 export interface DuplicateGroupDto {
   sha1: string;
   files: DuplicateFileDto[];
-  /** Folder dumps of the same title and version, not compared byte for byte. */
-  same_title: boolean;
+  /**
+   * "identical": same bytes. "same-title": title folders or discs with the same
+   * ID and version. "unverified-copy": verified copies of a game first, then
+   * unmatched files named as that game.
+   */
+  kind: "identical" | "same-title" | "unverified-copy";
+  /** For "unverified-copy" groups: how many leading files are verified. */
+  verified_count: number;
 }
 
 export interface RenamePlanEntryDto {

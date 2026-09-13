@@ -665,6 +665,14 @@ pub fn match_track_lists(conn: &Connection, system_id: Option<i64>) -> rusqlite:
     Ok(matched)
 }
 
+pub fn mark_rom_unverifiable(conn: &Connection, rom_id: i64) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE roms SET match_status = 'unverifiable', dat_rom_id = NULL WHERE id = ?1",
+        params![rom_id],
+    )?;
+    Ok(())
+}
+
 pub fn mark_rom_hash_error(conn: &Connection, rom_id: i64) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE roms SET match_status = 'error' WHERE id = ?1",
@@ -1028,7 +1036,7 @@ pub fn list_duplicate_groups(conn: &Connection) -> rusqlite::Result<Vec<Duplicat
         let (sha1, file) = row?;
         match groups.last_mut() {
             Some(g) if g.sha1 == sha1 => g.files.push(file),
-            _ => groups.push(DuplicateGroupDto { sha1, files: vec![file], same_title: false }),
+            _ => groups.push(DuplicateGroupDto { sha1, files: vec![file], kind: "identical".into(), verified_count: 0 }),
         }
     }
 
@@ -1065,9 +1073,85 @@ pub fn list_duplicate_groups(conn: &Connection) -> rusqlite::Result<Vec<Duplicat
         let (key, file) = row?;
         match groups.last_mut() {
             Some(g) if g.sha1 == key => g.files.push(file),
-            _ => groups.push(DuplicateGroupDto { sha1: key, files: vec![file], same_title: true }),
+            _ => groups.push(DuplicateGroupDto { sha1: key, files: vec![file], kind: "same-title".into(), verified_count: 0 }),
         }
     }
+
+    groups.extend(unverified_copy_groups(conn)?);
+    Ok(groups)
+}
+
+/// Unmatched files whose name is a game the library already has a verified
+/// copy of, grouped with those copies. Old sets are full of these: "[f1]"
+/// fixed, "[a1]" alternate or bad copies kept alongside the good dump.
+fn unverified_copy_groups(conn: &Connection) -> rusqlite::Result<Vec<DuplicateGroupDto>> {
+    use crate::scanner::wiiu::comparable_title;
+
+    let file = |r: &rusqlite::Row, display_name: String| -> rusqlite::Result<DuplicateFileDto> {
+        Ok(DuplicateFileDto {
+            id: r.get(0)?,
+            display_name,
+            file_name: r.get(1)?,
+            file_path: r.get(2)?,
+            archive_member: r.get(3)?,
+            size: r.get(4)?,
+            system_name: r.get(5)?,
+        })
+    };
+
+    let mut verified: HashMap<(i64, String), Vec<DuplicateFileDto>> = HashMap::new();
+    let mut stmt = conn.prepare(
+        "SELECT r.id, r.file_name, r.file_path, r.archive_member, r.size, s.name, r.system_id, dg.name
+         FROM roms r
+         JOIN systems s ON s.id = r.system_id
+         JOIN dat_roms dr ON dr.id = r.dat_rom_id
+         JOIN dat_games dg ON dg.id = dr.dat_game_id
+         WHERE r.match_status = 'matched'
+         ORDER BY r.file_path",
+    )?;
+    for row in stmt.query_map([], |r| {
+        let game: String = r.get(7)?;
+        Ok(((r.get::<_, i64>(6)?, comparable_title(&game)), file(r, game)?))
+    })? {
+        let (key, f) = row?;
+        verified.entry(key).or_default().push(f);
+    }
+
+    let mut copies: HashMap<(i64, String), Vec<DuplicateFileDto>> = HashMap::new();
+    let mut stmt = conn.prepare(
+        "SELECT r.id, r.file_name, r.file_path, r.archive_member, r.size, s.name, r.system_id
+         FROM roms r
+         JOIN systems s ON s.id = r.system_id
+         WHERE r.match_status = 'unmatched'
+         ORDER BY r.file_path",
+    )?;
+    for row in stmt.query_map([], |r| {
+        let file_name: String = r.get(1)?;
+        let member: Option<String> = r.get(3)?;
+        let title = crate::dat::filename::parse_filename_metadata(member.as_deref().unwrap_or(&file_name)).title;
+        Ok(((r.get::<_, i64>(6)?, comparable_title(&title)), file(r, title)?))
+    })? {
+        let (key, f) = row?;
+        if !key.1.is_empty() && verified.contains_key(&key) {
+            copies.entry(key).or_default().push(f);
+        }
+    }
+
+    let mut groups: Vec<DuplicateGroupDto> = copies
+        .into_iter()
+        .map(|(key, unverified)| {
+            let mut files = verified[&key].clone();
+            let verified_count = files.len();
+            files.extend(unverified);
+            DuplicateGroupDto {
+                sha1: format!("copy:{}:{}", key.0, key.1),
+                files,
+                kind: "unverified-copy".into(),
+                verified_count,
+            }
+        })
+        .collect();
+    groups.sort_by(|a, b| a.files[0].display_name.cmp(&b.files[0].display_name));
     Ok(groups)
 }
 
@@ -1213,7 +1297,7 @@ mod tests {
 
         let groups = list_duplicate_groups(&conn).unwrap();
         assert_eq!(groups.len(), 1, "only the two copies of the same game and version");
-        assert!(groups[0].same_title);
+        assert_eq!(groups[0].kind, "same-title");
         assert_eq!(groups[0].files.len(), 2);
 
         let id: i64 = conn.query_row("SELECT id FROM roms WHERE file_path = 'MARIO KART 8 (UPDATE DATA)'", [], |r| r.get(0)).unwrap();

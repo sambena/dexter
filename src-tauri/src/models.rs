@@ -221,13 +221,17 @@ pub struct DuplicateFileDto {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DuplicateGroupDto {
-    /// The shared SHA1, or for same-title groups "title:<title id>:v<version>".
+    /// A key for the group: the shared SHA1, or a title-based key.
     pub sha1: String,
     pub files: Vec<DuplicateFileDto>,
-    /// Folder dumps of the same title and version, which can't be compared
-    /// byte for byte but hold the same thing.
-    #[serde(default)]
-    pub same_title: bool,
+    /// "identical": the same bytes. "same-title": title folders or discs with
+    /// the same ID and version, which can't be compared byte for byte.
+    /// "unverified-copy": verified copies of a game, then unmatched files
+    /// named as that game (usually altered or bad dumps of it).
+    pub kind: String,
+    /// For "unverified-copy" groups, how many of `files` (from the start)
+    /// are the verified copies. 0 for other kinds.
+    pub verified_count: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

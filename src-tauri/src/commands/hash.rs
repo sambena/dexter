@@ -11,14 +11,24 @@ use std::sync::Arc;
 use std::thread;
 use tauri::{Emitter, State};
 
-fn compute_hash(rom: &PendingRom) -> Result<FileHashes, String> {
+enum HashFailure {
+    /// A format variant Dexter can't decode (e.g. a Wii RVZ image): it can't
+    /// be verified, which isn't an error worth retrying.
+    Unsupported,
+    Failed(String),
+}
+
+fn compute_hash(rom: &PendingRom) -> Result<FileHashes, HashFailure> {
     match &rom.archive_member {
         Some(member) => {
             let zip_path_len = rom.file_path.len().saturating_sub(member.len() + 2);
             let zip_path = &rom.file_path[..zip_path_len];
-            archive::hash_zip_member(Path::new(zip_path), member).map_err(|e| e.to_string())
+            archive::hash_zip_member(Path::new(zip_path), member).map_err(|e| HashFailure::Failed(e.to_string()))
         }
-        None => hashing::hash_file(Path::new(&rom.file_path)).map_err(|e| e.to_string()),
+        None => hashing::hash_file(Path::new(&rom.file_path)).map_err(|e| match e.kind() {
+            std::io::ErrorKind::Unsupported => HashFailure::Unsupported,
+            _ => HashFailure::Failed(e.to_string()),
+        }),
     }
 }
 
@@ -80,7 +90,7 @@ struct HashResult {
     system_id: Option<i64>,
     file_path: String,
     archive_member: Option<String>,
-    outcome: Result<FileHashes, String>,
+    outcome: Result<FileHashes, HashFailure>,
 }
 
 /// Hashes and DAT-matches every ROM discovered by a previous `scan_library` quick
@@ -175,7 +185,12 @@ pub async fn hash_pending_roms(app: tauri::AppHandle, state: State<'_, AppState>
                     summary.unmatched += 1;
                 }
             }
-            Err(e) => {
+            Err(HashFailure::Unsupported) => {
+                let conn = state.db.lock().map_err(|e| e.to_string())?;
+                repo::mark_rom_unverifiable(&conn, received.rom_id).map_err(|e| e.to_string())?;
+                summary.unverifiable += 1;
+            }
+            Err(HashFailure::Failed(e)) => {
                 let conn = state.db.lock().map_err(|e| e.to_string())?;
                 repo::mark_rom_hash_error(&conn, received.rom_id).map_err(|e| e.to_string())?;
                 summary.errors.push(format!("{}: {}", received.file_path, e));

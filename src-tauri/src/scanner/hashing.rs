@@ -172,6 +172,11 @@ pub fn hash_file(path: &Path) -> std::io::Result<FileHashes> {
         let reader = crate::scanner::ecm::EcmReader::new(std::io::BufReader::with_capacity(1 << 20, file));
         return hash_reader(reader, decoded, None);
     }
+    // Likewise an RVZ image, as the disc it decodes to.
+    if crate::scanner::rvz::is_rvz(name) {
+        let reader = crate::scanner::rvz::RvzReader::new(std::io::BufReader::with_capacity(1 << 20, file))?;
+        return hash_reader(reader, name, None);
+    }
     hash_reader(file, name, size)
 }
 

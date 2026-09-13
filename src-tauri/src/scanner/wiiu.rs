@@ -71,13 +71,21 @@ pub struct TitleInfo {
     pub product_code: Option<String>,
 }
 
-/// The DAT region a product code's last letter stands for ("WUP-P-AMKE" is USA).
+/// The DAT region a product code's region letter stands for: the last letter
+/// of a Wii U code ("WUP-P-AMKE" is USA), or the fourth character of a
+/// GameCube/Wii game ID ("SOUE01").
 pub fn region_for_product_code(code: &str) -> Option<&'static str> {
-    match code.chars().last()? {
+    let letter = if code.len() == 6 && !code.contains('-') { code.chars().nth(3)? } else { code.chars().last()? };
+    match letter {
         'E' => Some("USA"),
         'P' => Some("Europe"),
         'J' => Some("Japan"),
         'K' => Some("Korea"),
+        'D' => Some("Germany"),
+        'F' => Some("France"),
+        'S' => Some("Spain"),
+        'I' => Some("Italy"),
+        'U' => Some("Australia"),
         _ => None,
     }
 }
@@ -204,13 +212,25 @@ pub fn identify<'a>(info: &TitleInfo, dat_games: impl IntoIterator<Item = (i64, 
         .into_iter()
         .filter(|(_, name)| dat_name_kind(name) == info.kind && comparable_title(name) == key)
         .collect();
-    let in_region = info.region().and_then(|region| {
-        candidates.iter().find(|(_, name)| {
-            // The first parenthesised group is the region list, e.g. "(USA, Europe)".
-            name.split(" (").nth(1).is_some_and(|group| group.trim_end_matches(')').split(", ").any(|r| r == region))
-        })
-    });
-    in_region.or(candidates.first()).map(|(id, _)| *id)
+    let in_region: Vec<&(i64, &str)> = match info.region() {
+        Some(region) => candidates
+            .iter()
+            .filter(|(_, name)| {
+                // The first parenthesised group is the region list, e.g. "(USA, Europe)".
+                name.split(" (").nth(1).is_some_and(|group| group.trim_end_matches(')').split(", ").any(|r| r == region))
+            })
+            .collect(),
+        None => Vec::new(),
+    };
+    let pool: Vec<&(i64, &str)> = if in_region.is_empty() { candidates.iter().collect() } else { in_region };
+    // Discs name their revision; "(Rev 1)" in a DAT name is revision 1.
+    let revision_of = |name: &str| {
+        name.split("(Rev ").nth(1).and_then(|rest| rest.split(')').next()).and_then(|n| n.trim().parse::<u32>().ok()).unwrap_or(0)
+    };
+    pool.iter()
+        .find(|(_, name)| revision_of(name) == info.version)
+        .or(pool.first())
+        .map(|(id, _)| *id)
 }
 
 #[cfg(test)]
@@ -292,5 +312,26 @@ Twilight Princess HD</longname_en>"#;
         assert_eq!(identify(&info, dat), Some(1));
         info.kind = TitleKind::Demo;
         assert_eq!(identify(&info, dat), None);
+    }
+
+    #[test]
+    fn identify_prefers_the_disc_revision() {
+        let dat = [
+            (1, "Legend of Zelda, The - Skyward Sword (USA) (En,Fr,Es)"),
+            (2, "Legend of Zelda, The - Skyward Sword (USA) (En,Fr,Es) (Rev 1)"),
+            (3, "Legend of Zelda, The - Skyward Sword (Europe) (En,Fr,De,Es,It)"),
+        ];
+        let mut info = TitleInfo {
+            title_id: "SOUE01".into(),
+            version: 1,
+            kind: TitleKind::Game,
+            name: "The Legend of Zelda Skyward Sword".into(),
+            product_code: Some("SOUE01".into()),
+        };
+        assert_eq!(identify(&info, dat), Some(2));
+        info.version = 0;
+        assert_eq!(identify(&info, dat), Some(1));
+        info.product_code = Some("SOUP01".into());
+        assert_eq!(identify(&info, dat), Some(3));
     }
 }
