@@ -9,9 +9,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 fn art_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("art");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    Ok(dir)
+    crate::storage::art_folder(app)
 }
 
 fn to_data_url(path: &Path) -> Result<String, String> {

@@ -1,6 +1,7 @@
 import { FolderPicker } from "./FolderPicker";
 import { DatImportPanel } from "./DatImportPanel";
 import { EmulatorSettings } from "./EmulatorSettings";
+import { StoragePanel } from "./StoragePanel";
 
 export function SettingsDialog({ onClose }: { onClose: () => void }) {
   return (
@@ -14,6 +15,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           <FolderPicker />
           <DatImportPanel />
           <EmulatorSettings />
+          <StoragePanel />
         </div>
       </div>
     </div>

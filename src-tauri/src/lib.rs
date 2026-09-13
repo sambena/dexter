@@ -8,6 +8,7 @@ mod emulators;
 mod models;
 mod scanner;
 mod state;
+mod storage;
 
 use state::AppState;
 use tauri::Manager;
@@ -19,15 +20,20 @@ fn context() -> tauri::Context<tauri::Wry> {
 /// Opens the library database and registers the shared state. Used by the
 /// window and by dexter-cli when it runs without the app open.
 fn init_state(app: &tauri::AppHandle) -> Result<(), String> {
-    let app_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(&app_dir).map_err(|e| format!("failed to create app data dir: {}", e))?;
-    let db_path = app_dir.join("library.db");
+    let app_dir = storage::app_folder(app)?;
+    let locations = storage::load(&app_dir)?;
+    let db_path = locations.database_path(&app_dir);
+    // A moved library that isn't there (say, on a disconnected drive) must not
+    // be replaced by a new, empty one.
+    if locations.library_folder.is_some() && !db_path.is_file() {
+        return Err(format!(
+            "The library database isn't at {}. Reconnect the drive it's on, or delete {} to start a new library.",
+            db_path.display(),
+            app_dir.join("locations.json").display()
+        ));
+    }
 
-    let conn = rusqlite::Connection::open(db_path).map_err(|e| format!("failed to open database: {}", e))?;
-    // The window and dexter-cli can both have the database open, so wait for
-    // a lock briefly rather than failing immediately.
-    conn.busy_timeout(std::time::Duration::from_secs(10))
-        .map_err(|e| e.to_string())?;
+    let conn = storage::open_database(&db_path)?;
     db::schema::migrate(&conn).map_err(|e| format!("failed to run database migrations: {}", e))?;
 
     app.manage(AppState {
@@ -73,6 +79,9 @@ pub fn run() {
             commands::settings::get_settings,
             commands::settings::save_settings,
             commands::settings::pick_rom_root_folder,
+            commands::settings::get_storage_locations,
+            commands::settings::move_library_database,
+            commands::settings::move_box_art,
             commands::settings::pick_emulator_path,
             commands::settings::list_systems,
             commands::settings::set_system_emulator,

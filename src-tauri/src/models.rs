@@ -28,6 +28,17 @@ pub struct Settings {
     pub rom_root_path: Option<String>,
 }
 
+/// Where the library database and box art are kept (see storage).
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StorageLocationsDto {
+    pub library_folder: String,
+    pub library_is_default: bool,
+    pub art_folder: String,
+    pub art_is_default: bool,
+    /// Holds api.json, the window state and locations.json, which don't move.
+    pub app_folder: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DatImportSummary {
     pub games_imported: i64,

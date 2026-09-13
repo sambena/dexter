@@ -13,7 +13,7 @@ import type {
   ScanSummary,
   SystemDto,
 } from "../types/rom";
-import type { Settings } from "../types/settings";
+import type { Settings, StorageLocationsDto } from "../types/settings";
 import type { AutoConfigureSummary, EmulatorChoice, EmulatorSetupDto } from "../types/emulators";
 
 export const api = {
@@ -21,6 +21,9 @@ export const api = {
   saveSettings: (settings: Settings) => invoke<void>("save_settings", { settings }),
   pickRomRootFolder: () => invoke<string | null>("pick_rom_root_folder"),
   pickEmulatorPath: () => invoke<string | null>("pick_emulator_path"),
+  getStorageLocations: () => invoke<StorageLocationsDto>("get_storage_locations"),
+  moveLibraryDatabase: (folder: string | null) => invoke<StorageLocationsDto>("move_library_database", { folder }),
+  moveBoxArt: (folder: string | null) => invoke<MaintenanceSummary>("move_box_art", { folder }),
 
   listSystems: () => invoke<SystemDto[]>("list_systems"),
   setSystemEmulator: (systemId: number, emulatorPath: string | null, emulatorArgs: string | null) =>

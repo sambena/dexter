@@ -44,6 +44,9 @@ const fn job(label: &'static str, cancellable: bool) -> Option<Job> {
 pub const COMMANDS: &[CommandInfo] = &[
     read("get_settings", "", "Current settings (ROM root folder)."),
     write("save_settings", "settings.rom_root_path?", "Replace settings.", None),
+    read("get_storage_locations", "", "Where the library database and box art are kept."),
+    write("move_library_database", "folder?", "Move library.db to a folder (omitted: the app data folder).", job("Moving library", false)),
+    write("move_box_art", "folder?", "Move box art to a folder (omitted: the default).", job("Moving box art", false)),
     read("list_systems", "", "Systems with their emulator, DAT URL and whether a DAT is imported."),
     write(
         "set_system_emulator",
@@ -141,6 +144,9 @@ async fn run(app: &AppHandle, name: &str, a: &Map<String, Value>) -> Result<Valu
     match name {
         "get_settings" => to_value(settings::get_settings(state)),
         "save_settings" => to_value(settings::save_settings(arg::<Option<Settings>>(a, "settings")?.unwrap_or_default(), state)),
+        "get_storage_locations" => to_value(settings::get_storage_locations(handle)),
+        "move_library_database" => to_value(settings::move_library_database(arg(a, "folder")?, handle).await),
+        "move_box_art" => to_value(settings::move_box_art(arg(a, "folder")?, handle).await),
         "list_systems" => to_value(settings::list_systems(state)),
         "set_system_emulator" => to_value(settings::set_system_emulator(
             arg(a, "system_id")?,
